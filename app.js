@@ -526,4 +526,399 @@ async function startProcessing() {
         log('Exit code: ' + exitCode);
 
         if (exitCode !== 0) throw new Error('FFMPEG_ERROR');
-        if (state.cancelled) 
+        if (state.cancelled) throw new Error('CANCELLED');
+
+        // STEP 4: Read output
+        updateStatus('Wrapping up… 🎁');
+        var outputData;
+        try {
+            outputData = await state.ffmpeg.readFile('output.mp4');
+            log('Output: ' + formatBytes(outputData.byteLength));
+        } catch (e) {
+            throw new Error('OUTPUT_READ_FAILED');
+        }
+
+        if (!outputData || outputData.byteLength < 1000) throw new Error('OUTPUT_EMPTY');
+
+        state.outputBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
+        state.outputUrl = URL.createObjectURL(state.outputBlob);
+        state.outputSize = state.outputBlob.size;
+
+        // Check if output is WhatsApp-friendly size
+        var sizeMB = state.outputSize / (1024 * 1024);
+        if (sizeMB > 12) {
+            log('⚠️ Output is ' + sizeMB.toFixed(1) + 'MB — WhatsApp may still compress slightly');
+        } else {
+            log('✅ Output is ' + sizeMB.toFixed(1) + 'MB — WhatsApp should barely touch this');
+        }
+
+        // Cleanup
+        try {
+            await state.ffmpeg.deleteFile('input');
+            await state.ffmpeg.deleteFile('output.mp4');
+        } catch (e) { }
+
+        log('=== COMPLETE ✅ ===');
+        haptic('success');
+        showDone();
+
+    } catch (err) {
+        stopFunMessages();
+        if (err.message === 'CANCELLED') {
+            showToast('Processing cancelled', 'info');
+            showScreen('home-screen');
+            return;
+        }
+        logError('Failed', err);
+
+        var title = 'Processing Failed';
+        var msg = '';
+        switch (err.message) {
+            case 'SCRIPT_NOT_LOADED':
+                title = 'Engine Not Loaded';
+                msg = 'The video engine could not load. Refresh and check your internet.';
+                break;
+            case 'ENGINE_LOAD_FAILED':
+                title = 'Engine Download Failed';
+                msg = 'Could not download the engine. Check your internet connection.';
+                break;
+            case 'FFMPEG_ERROR':
+                title = 'Video Format Issue';
+                msg = 'This video format could not be processed. Try a different MP4 video.';
+                break;
+            case 'OUTPUT_READ_FAILED':
+            case 'OUTPUT_EMPTY':
+                title = 'Processing Error';
+                msg = 'Output was empty. Try a shorter or smaller video.';
+                break;
+            default:
+                msg = 'Something went wrong. Try a different video or refresh.';
+        }
+        showError(title, msg);
+        showScreen('home-screen');
+    } finally {
+        state.processing = false;
+        stopFunMessages();
+    }
+}
+
+function cancelProcessing() {
+    state.cancelled = true;
+    showToast('Cancelling…', 'info', 2000);
+}
+
+/* ======================== PROGRESS ======================== */
+function setProgress(pct) {
+    els.progressFill.style.width = pct + '%';
+    els.progressText.textContent = pct + ' %';
+}
+function updateStatus(msg) {
+    els.processingStatus.style.opacity = '0';
+    setTimeout(function() {
+        els.processingStatus.textContent = msg;
+        els.processingStatus.style.opacity = '1';
+    }, 150);
+}
+
+var funTimer = null, funIdx = 0;
+function startFunMessages() {
+    funIdx = 0;
+    funTimer = setInterval(function() {
+        funIdx = (funIdx + 1) % FUN_MESSAGES.length;
+        els.funTip.textContent = FUN_MESSAGES[funIdx];
+    }, 3500);
+}
+function stopFunMessages() { clearInterval(funTimer); }
+
+/* ======================== DONE ======================== */
+function showDone() {
+    els.statBefore.textContent = formatBytes(state.originalSize);
+    els.statAfter.textContent = formatBytes(state.outputSize);
+    var saved = Math.max(0, Math.round((1 - state.outputSize / state.originalSize) * 100));
+    els.statSaved.textContent = saved > 0 ? ('-' + saved + '%') : '✨ optimized';
+
+    if (state.outputUrl) {
+        els.donePreview.src = state.outputUrl;
+        els.donePlayBtn.classList.remove('hide');
+        els.donePlayBtn.textContent = '▶';
+    }
+
+    state.tipsShown = false;
+    els.tipsSection.classList.add('hidden');
+    els.tipsList.innerHTML = '';
+
+    showScreen('done-screen');
+    setTimeout(function() { fireConfetti(); }, 300);
+}
+
+/* ======================== DOWNLOAD & SHARE ======================== */
+function downloadVideo() {
+    if (!state.outputUrl) return;
+    haptic('medium');
+    var a = document.createElement('a');
+    a.href = state.outputUrl;
+    a.download = 'crispy-status.mp4';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    markUsed();
+    showToast('Video saved! Post it to Status now 🔥', 'success');
+    if (!state.tipsShown) {
+        state.tipsShown = true;
+        setTimeout(function() { showTips(); }, 600);
+    }
+}
+
+function shareToWhatsApp() {
+    if (!state.outputBlob) return;
+    haptic('medium');
+    if (navigator.canShare) {
+        var file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
+        if (navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file] }).then(function() {
+                markUsed();
+                showToast('Shared! 🚀', 'success');
+            }).catch(function() {});
+            return;
+        }
+    }
+    downloadVideo();
+}
+
+/* ======================== TIPS ======================== */
+function showTips() {
+    els.tipsSection.classList.remove('hidden');
+    els.tipsList.innerHTML = '';
+    QUALITY_TIPS.forEach(function(tip) {
+        var card = document.createElement('div');
+        card.className = 'tip-card';
+        card.innerHTML =
+            '<span class="tip-icon">' + tip.icon + '</span>' +
+            '<div class="tip-content">' +
+            '<strong>' + tip.title + '</strong>' +
+            '<p>' + tip.text + '</p></div>';
+        els.tipsList.appendChild(card);
+    });
+    setTimeout(function() {
+        els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 350);
+}
+
+/* ======================== PWA ======================== */
+function setupInstallPrompt() {
+    window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        state.installPrompt = e;
+        if (!localStorage.getItem('crispy_install_dismissed')) {
+            setTimeout(function() { els.installPrompt.classList.remove('hidden'); }, 5000);
+        }
+    });
+    els.installYes.addEventListener('click', async function() {
+        if (!state.installPrompt) return;
+        await state.installPrompt.prompt();
+        state.installPrompt = null;
+        els.installPrompt.classList.add('hidden');
+        showToast('Installed! 📲', 'success');
+    });
+    els.installDismiss.addEventListener('click', function() {
+        els.installPrompt.classList.add('hidden');
+        localStorage.setItem('crispy_install_dismissed', 'true');
+    });
+}
+
+/* ======================== UTILITIES ======================== */
+function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function formatTime(s) {
+    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+}
+function truncateFilename(n, max) {
+    if (n.length <= max) return n;
+    var ext = n.split('.').pop();
+    return n.substring(0, max - ext.length - 3) + '….' + ext;
+}
+function estimateFileSize(durationSec) {
+    // Rough estimate: CRF 23 at 540p ≈ 1-2 Mbps effective
+    var bitsPerSec = 1500000; // ~1.5 Mbps average
+    var audioBitsPerSec = 128000;
+    var totalBits = (bitsPerSec + audioBitsPerSec) * durationSec;
+    return formatBytes(totalBits / 8);
+}
+function cleanup() {
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    if (state.outputUrl) URL.revokeObjectURL(state.outputUrl);
+    state.objectUrl = null; state.outputUrl = null;
+    state.outputBlob = null; state.file = null;
+    state.tipsShown = false; state.videoWidth = 0; state.videoHeight = 0;
+    els.fileInput.value = ''; els.donePreview.src = ''; els.trimVideo.src = '';
+}
+
+/* ======================== NAVIGATION ======================== */
+function setupBackButton() {
+    window.addEventListener('popstate', function() {
+        if (state.processing) {
+            history.pushState({ screen: 'processing-screen' }, '', '');
+            showToast('Processing in progress… Cancel first.', 'info');
+            return;
+        }
+        var current = document.querySelector('.screen.active');
+        if (current) {
+            if (current.id === 'trim-screen') { els.trimVideo.pause(); showScreen('home-screen'); }
+            else if (current.id === 'done-screen') { cleanup(); showScreen('home-screen'); }
+            else showScreen('home-screen');
+        }
+    });
+}
+
+function setupBeforeUnload() {
+    window.addEventListener('beforeunload', function(e) {
+        if (state.processing) { e.preventDefault(); e.returnValue = ''; }
+    });
+}
+
+/* ======================== EVENTS ======================== */
+function bindEvents() {
+
+    els.uploadBtn.addEventListener('click', function() {
+        if (!canUseToday()) { showPremium(); return; }
+        haptic('light'); els.fileInput.click();
+    });
+    els.fileInput.addEventListener('change', function(e) {
+        var f = e.target.files && e.target.files[0];
+        if (f) handleFileSelect(f);
+    });
+
+    els.trimBackBtn.addEventListener('click', function() {
+        haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
+    });
+
+    var seekDebounce;
+    els.trimSlider.addEventListener('input', function() {
+        updateTrimUI();
+        clearTimeout(seekDebounce);
+        seekDebounce = setTimeout(function() { els.trimVideo.currentTime = state.trimStart; }, 60);
+    });
+
+    els.playPreviewBtn.addEventListener('click', function() {
+        haptic('light');
+        var v = els.trimVideo;
+        if (v.paused) {
+            v.currentTime = state.trimStart; v.muted = false; v.play();
+            els.playPreviewBtn.textContent = '⏸';
+            els.playPreviewBtn.classList.add('hide');
+            var stopAt = state.trimStart + CONFIG.maxDuration;
+            var stop = function() {
+                if (v.currentTime >= stopAt) {
+                    v.pause(); v.removeEventListener('timeupdate', stop);
+                    els.playPreviewBtn.textContent = '▶';
+                    els.playPreviewBtn.classList.remove('hide');
+                }
+            };
+            v.addEventListener('timeupdate', stop);
+        } else {
+            v.pause();
+            els.playPreviewBtn.textContent = '▶';
+            els.playPreviewBtn.classList.remove('hide');
+        }
+    });
+
+    els.trimVideo.addEventListener('click', function() { els.playPreviewBtn.click(); });
+    els.trimContinueBtn.addEventListener('click', function() {
+        haptic('medium'); els.trimVideo.pause(); startProcessing();
+    });
+
+    els.cancelBtn.addEventListener('click', function() { haptic('light'); cancelProcessing(); });
+
+    els.donePlayBtn.addEventListener('click', function() {
+        haptic('light');
+        var v = els.donePreview;
+        if (v.paused) { v.play(); els.donePlayBtn.classList.add('hide'); }
+        else { v.pause(); els.donePlayBtn.classList.remove('hide'); }
+    });
+    els.donePreview.addEventListener('click', function() { els.donePlayBtn.click(); });
+    els.donePreview.addEventListener('ended', function() {
+        els.donePlayBtn.classList.remove('hide');
+        els.donePlayBtn.textContent = '▶';
+    });
+
+    els.downloadBtn.addEventListener('click', downloadVideo);
+    els.shareBtn.addEventListener('click', shareToWhatsApp);
+
+    els.newVideoBtn.addEventListener('click', function() {
+        haptic('light');
+        if (!canUseToday()) { showPremium(); return; }
+        cleanup(); showScreen('home-screen');
+    });
+
+    els.premiumCloseBtn.addEventListener('click', function() { haptic('light'); hidePremium(); });
+    els.upgradeBtn.addEventListener('click', function() {
+        haptic('medium'); showToast('Premium coming soon! 🚀', 'info');
+    });
+    els.errorCloseBtn.addEventListener('click', function() {
+        haptic('light'); hideError(); showScreen('home-screen');
+    });
+    els.premiumModal.addEventListener('click', function(e) { if (e.target === els.premiumModal) hidePremium(); });
+    els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            if (!els.premiumModal.classList.contains('hidden')) hidePremium();
+            if (!els.errorModal.classList.contains('hidden')) hideError();
+        }
+    });
+
+    window.addEventListener('resize', function() {
+        els.confettiCanvas.width = window.innerWidth;
+        els.confettiCanvas.height = window.innerHeight;
+    });
+}
+
+/* ======================== SERVICE WORKER ======================== */
+function registerSW() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(function() {});
+    }
+}
+
+/* ======================== PRELOAD ======================== */
+function preloadFFmpeg() {
+    setTimeout(function() {
+        if (!state.ffmpegReady) {
+            log('Preloading FFmpeg…');
+            loadFFmpeg()
+                .then(function() { log('Preload done ✅'); })
+                .catch(function(e) { log('Preload failed (will retry): ' + e.message); });
+        }
+    }, 4000);
+}
+
+/* ======================== INIT ======================== */
+function init() {
+    log('Crispy Status v2 initializing…');
+
+    if (typeof WebAssembly === 'undefined') {
+        showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.');
+        return;
+    }
+    log('WebAssembly: ✅');
+    log('SharedArrayBuffer: ' + (typeof SharedArrayBuffer !== 'undefined' ? '✅' : 'not available (OK)'));
+
+    bindEvents();
+    registerSW();
+    setupInstallPrompt();
+    setupBackButton();
+    setupBeforeUnload();
+    showScreen('home-screen');
+    preloadFFmpeg();
+
+    els.confettiCanvas.width = window.innerWidth;
+    els.confettiCanvas.height = window.innerHeight;
+
+    log('Init complete ✅');
+    log('Quality settings:', CONFIG.quality);
+}
+
+init();
