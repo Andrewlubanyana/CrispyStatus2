@@ -63,7 +63,7 @@
         <div class="screen-content">
 
             <div class="logo-area">
-                <div class="logo-icon" aria-hidden="true">��</div>
+                <div class="logo-icon" aria-hidden="true">🔥</div>
                 <h1 class="logo-text">Crispy Status</h1>
                 <p class="tagline">Sharp status. Every time.</p>
             </div>
@@ -233,7 +233,7 @@
     <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
          aria-labelledby="error-heading">
         <div class="modal-card">
-            <div class="error-emoji" aria-hidden="true">😬</div>
+            <div class="error-emoji" aria-hidden="true">��</div>
             <h2 id="error-heading">Oops!</h2>
             <p id="error-msg">Something went wrong.</p>
             <button id="error-close-btn" class="btn btn-primary">Try Again</button>
@@ -242,18 +242,48 @@
 
 </div>
 
-<!-- 
-    FFmpeg WASM — Only the main package needed.
-    We write our own helper functions instead of @ffmpeg/util.
+<!--
+    WORKER PATCH — Must load BEFORE FFmpeg.
+    Browsers block Workers from cross-origin URLs (CDN).
+    But importScripts() inside Workers IS allowed cross-origin.
+    This patch wraps cross-origin Worker URLs in a blob that
+    uses importScripts, solving the CORS issue cleanly.
 -->
+<script>
+(function() {
+    var OriginalWorker = window.Worker;
+    window.Worker = function PatchedWorker(scriptURL, options) {
+        var url = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
+
+        // If the URL is cross-origin, wrap it with importScripts
+        if (url.startsWith('http') && !url.startsWith(location.origin)) {
+            console.log('[Crispy Worker Patch] Wrapping cross-origin worker:', url);
+            var blob = new Blob(
+                ['importScripts(' + JSON.stringify(url) + ');'],
+                { type: 'text/javascript' }
+            );
+            return new OriginalWorker(URL.createObjectURL(blob), options);
+        }
+
+        // Same-origin or blob URL — pass through normally
+        return new OriginalWorker(scriptURL, options);
+    };
+
+    // Preserve prototype chain
+    window.Worker.prototype = OriginalWorker.prototype;
+
+    console.log('[Crispy] ✅ Worker CORS patch installed');
+})();
+</script>
+
+<!-- FFmpeg WASM — single dependency, no @ffmpeg/util needed -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
 
-<!-- Verify FFmpeg loaded -->
 <script>
     if (typeof FFmpegWASM === 'undefined') {
-        console.error('[Crispy] FFmpegWASM FAILED to load from CDN');
+        console.error('[Crispy] ❌ FFmpegWASM failed to load from CDN');
     } else {
-        console.log('[Crispy] ✅ FFmpegWASM loaded successfully');
+        console.log('[Crispy] ✅ FFmpegWASM loaded');
     }
 </script>
 
