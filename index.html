@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Crispy Status — Sharp WhatsApp Status. Every Time.</title>
 
-    <!-- PWA -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0B0B1A">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,37 +12,30 @@
     <meta name="apple-mobile-web-app-title" content="Crispy Status">
     <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos.">
 
-    <!-- Social / Open Graph -->
     <meta property="og:title" content="Crispy Status — Sharp Status. Every Time.">
     <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video so it stays HD.">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/og-image.png">
     <meta name="twitter:card" content="summary_large_image">
 
-    <!-- Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
 
-    <!-- Styles -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<!-- Background decoration -->
 <div class="bg-orbs" aria-hidden="true">
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
 </div>
 
-<!-- Confetti canvas -->
 <canvas id="confetti-canvas" aria-hidden="true"></canvas>
 
-<!-- Toast container -->
 <div id="toast-container" aria-live="polite"></div>
 
-<!-- PWA install prompt -->
 <div id="install-prompt" class="install-prompt hidden" role="banner">
     <div class="install-inner">
         <span class="install-icon" aria-hidden="true">📲</span>
@@ -224,7 +216,7 @@
                 <li><span>📦</span> Batch processing</li>
                 <li><span>🎬</span> 1080p output</li>
             </ul>
-            <button id="upgrade-btn" class="btn btn-premium">Upgrade — $2.99/mo</button>
+            <button id="upgrade-btn" class="btn btn-premium">Upgrade — $9.99/mo</button>
             <button id="premium-close-btn" class="btn btn-ghost">Maybe later</button>
         </div>
     </div>
@@ -233,7 +225,7 @@
     <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
          aria-labelledby="error-heading">
         <div class="modal-card">
-            <div class="error-emoji" aria-hidden="true">��</div>
+            <div class="error-emoji" aria-hidden="true">😬</div>
             <h2 id="error-heading">Oops!</h2>
             <p id="error-msg">Something went wrong.</p>
             <button id="error-close-btn" class="btn btn-primary">Try Again</button>
@@ -242,52 +234,10 @@
 
 </div>
 
-<!--
-    WORKER PATCH — Must load BEFORE FFmpeg.
-    Browsers block Workers from cross-origin URLs (CDN).
-    But importScripts() inside Workers IS allowed cross-origin.
-    This patch wraps cross-origin Worker URLs in a blob that
-    uses importScripts, solving the CORS issue cleanly.
--->
+<!-- Worker CORS patch — MUST load before FFmpeg -->
 <script>
 (function() {
     var OriginalWorker = window.Worker;
     window.Worker = function PatchedWorker(scriptURL, options) {
         var url = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
-
-        // If the URL is cross-origin, wrap it with importScripts
-        if (url.startsWith('http') && !url.startsWith(location.origin)) {
-            console.log('[Crispy Worker Patch] Wrapping cross-origin worker:', url);
-            var blob = new Blob(
-                ['importScripts(' + JSON.stringify(url) + ');'],
-                { type: 'text/javascript' }
-            );
-            return new OriginalWorker(URL.createObjectURL(blob), options);
-        }
-
-        // Same-origin or blob URL — pass through normally
-        return new OriginalWorker(scriptURL, options);
-    };
-
-    // Preserve prototype chain
-    window.Worker.prototype = OriginalWorker.prototype;
-
-    console.log('[Crispy] ✅ Worker CORS patch installed');
-})();
-</script>
-
-<!-- FFmpeg WASM — single dependency, no @ffmpeg/util needed -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
-
-<script>
-    if (typeof FFmpegWASM === 'undefined') {
-        console.error('[Crispy] ❌ FFmpegWASM failed to load from CDN');
-    } else {
-        console.log('[Crispy] ✅ FFmpegWASM loaded');
-    }
-</script>
-
-<!-- App logic -->
-<script src="app.js"></script>
-</body>
-</html>
+        if 
