@@ -1,9 +1,11 @@
 /* ==========================================================
-   CRISPY STATUS — App Logic (Fully Fixed)
-   
-   KEY FIX: Removed dependency on @ffmpeg/util entirely.
-   The toBlobURL helper is now written inline (5 lines).
-   All video processing happens on the user's device.
+   CRISPY STATUS — App Logic (CORS Worker Fix)
+
+   Fixes applied:
+   1. Worker CORS patch in HTML handles cross-origin Workers
+   2. Custom toBlobURL replaces @ffmpeg/util dependency
+   3. Direct ArrayBuffer reading for file input
+   4. Comprehensive error handling and logging
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -35,16 +37,16 @@ const FUN_MESSAGES = [
 ];
 
 const QUALITY_TIPS = [
-    { icon:'📱', title:'Post directly to Status',
-      text:'Open WhatsApp → Status tab → pick the crispy video from your gallery.' },
-    { icon:'🚫', title:"Don't re-edit the video",
-      text:'Any editing after download may re-compress and reduce quality.' },
-    { icon:'📂', title:'Use the original file',
-      text:'Never screenshot or screen-record your video — always use the downloaded file.' },
-    { icon:'⚡', title:'Post it right away',
-      text:'Upload to Status soon after downloading. Some phones re-compress stored videos.' },
-    { icon:'📐', title:'Film vertical next time',
-      text:'9:16 vertical videos fill the entire Status screen perfectly.' },
+    { icon: '📱', title: 'Post directly to Status',
+      text: 'Open WhatsApp → Status tab → pick the crispy video from your gallery.' },
+    { icon: '🚫', title: "Don't re-edit the video",
+      text: 'Any editing after download may re-compress and reduce quality.' },
+    { icon: '📂', title: 'Use the original file',
+      text: 'Never screenshot or screen-record your video — always use the downloaded file.' },
+    { icon: '⚡', title: 'Post it right away',
+      text: 'Upload to Status soon after downloading. Some phones re-compress stored videos.' },
+    { icon: '📐', title: 'Film vertical next time',
+      text: '9:16 vertical videos fill the entire Status screen perfectly.' },
 ];
 
 /* ======================== STATE ======================== */
@@ -67,18 +69,18 @@ const state = {
 
 /* ======================== LOGGING ======================== */
 function log(msg, data) {
-    const ts = new Date().toISOString().substr(11, 12);
-    if (data !== undefined) console.log(`[Crispy ${ts}] ${msg}`, data);
-    else console.log(`[Crispy ${ts}] ${msg}`);
+    var ts = new Date().toISOString().substr(11, 12);
+    if (data !== undefined) console.log('[Crispy ' + ts + '] ' + msg, data);
+    else console.log('[Crispy ' + ts + '] ' + msg);
 }
 function logError(msg, err) {
-    console.error(`[Crispy ERROR] ${msg}`, err);
+    console.error('[Crispy ERROR] ' + msg, err);
 }
 
 /* ======================== DOM REFS ======================== */
-const $ = (id) => document.getElementById(id);
+function $(id) { return document.getElementById(id); }
 
-const els = {
+var els = {
     homeScreen       : $('home-screen'),
     trimScreen       : $('trim-screen'),
     processingScreen : $('processing-screen'),
@@ -123,57 +125,61 @@ const els = {
     confettiCanvas   : $('confetti-canvas'),
 };
 
-/* ======================== HELPER: toBlobURL ========================
-   This replaces the entire @ffmpeg/util dependency.
-   It fetches a file from a URL and converts it to a local blob URL
-   so FFmpeg can load it without CORS issues.
-   ================================================================ */
+/* ======================== toBlobURL ========================
+   Replaces @ffmpeg/util entirely.
+   Fetches a remote file and converts it to a local blob URL
+   so FFmpeg core can load it without CORS issues.
+   ========================================================== */
 async function toBlobURL(url, mimeType) {
     log('Fetching: ' + url);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    const blob = new Blob([buffer], { type: mimeType });
-    const blobUrl = URL.createObjectURL(blob);
-    log('Blob URL created for: ' + url.split('/').pop());
+    var response = await fetch(url);
+    if (!response.ok) throw new Error('HTTP ' + response.status + ' fetching ' + url);
+    var buffer = await response.arrayBuffer();
+    var blob = new Blob([buffer], { type: mimeType });
+    var blobUrl = URL.createObjectURL(blob);
+    log('Blob URL ready for: ' + url.split('/').pop() + ' (' + formatBytes(buffer.byteLength) + ')');
     return blobUrl;
 }
 
 /* ======================== SCREEN NAV ======================== */
 function showScreen(id) {
-    log('Navigating to: ' + id);
-    document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active', 'screen-enter'));
-    const target = $(id);
+    log('Screen → ' + id);
+    document.querySelectorAll('.screen').forEach(function(s) {
+        s.classList.remove('active', 'screen-enter');
+    });
+    var target = $(id);
     target.classList.add('active', 'screen-enter');
     window.scrollTo({ top: 0, behavior: 'instant' });
-    if (history.state?.screen !== id) {
+    if (!history.state || history.state.screen !== id) {
         history.pushState({ screen: id }, '', '');
     }
 }
 
 /* ======================== TOAST ======================== */
-function showToast(message, type = 'info', duration = 3000) {
-    const container = $('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    const icons = { success:'✅', error:'❌', info:'💡' };
-    toast.innerHTML = `<span class="toast-icon">${icons[type]||icons.info}</span><span>${message}</span>`;
+function showToast(message, type, duration) {
+    type = type || 'info';
+    duration = duration || 3000;
+    var container = $('toast-container');
+    var toast = document.createElement('div');
+    toast.className = 'toast ' + type;
+    var icons = { success: '✅', error: '❌', info: '💡' };
+    toast.innerHTML = '<span class="toast-icon">' + (icons[type] || icons.info) + '</span><span>' + message + '</span>';
     container.appendChild(toast);
-    setTimeout(() => {
+    setTimeout(function() {
         toast.classList.add('toast-out');
-        toast.addEventListener('animationend', () => toast.remove());
+        toast.addEventListener('animationend', function() { toast.remove(); });
     }, duration);
 }
 
 /* ======================== CONFETTI ======================== */
 function fireConfetti() {
-    const canvas = els.confettiCanvas;
-    const ctx = canvas.getContext('2d');
+    var canvas = els.confettiCanvas;
+    var ctx = canvas.getContext('2d');
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    const colors = ['#FF6B35','#FF3366','#8B5CF6','#22D67F','#FBBF24','#06B6D4','#fff'];
-    const particles = [];
-    for (let i = 0; i < 90; i++) {
+    var colors = ['#FF6B35', '#FF3366', '#8B5CF6', '#22D67F', '#FBBF24', '#06B6D4', '#fff'];
+    var particles = [];
+    for (var i = 0; i < 90; i++) {
         particles.push({
             x: canvas.width / 2 + (Math.random() - 0.5) * 100,
             y: canvas.height * 0.35,
@@ -188,11 +194,11 @@ function fireConfetti() {
             shape: Math.random() > 0.5 ? 'circle' : 'rect',
         });
     }
-    let frame = 0;
-    const maxFrames = 150;
+    var frame = 0;
+    var maxFrames = 150;
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        particles.forEach((p) => {
+        particles.forEach(function(p) {
             p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.99;
             p.rotation += p.rotSpeed;
             p.opacity = Math.max(0, 1 - frame / maxFrames);
@@ -218,24 +224,25 @@ function fireConfetti() {
 }
 
 /* ======================== HAPTIC ======================== */
-function haptic(style = 'light') {
+function haptic(style) {
+    style = style || 'light';
     if (!navigator.vibrate) return;
-    const p = { light: [12], medium: [25], heavy: [50], success: [15, 50, 15] };
-    navigator.vibrate(p[style] || p.light);
+    var patterns = { light: [12], medium: [25], heavy: [50], success: [15, 50, 15] };
+    navigator.vibrate(patterns[style] || patterns.light);
 }
 
 /* ======================== DAILY LIMIT ======================== */
 function canUseToday() {
-    const today = new Date().toDateString();
-    const saved = localStorage.getItem('crispy_date');
-    const count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
+    var today = new Date().toDateString();
+    var saved = localStorage.getItem('crispy_date');
+    var count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
     if (saved !== today) return true;
     return count < CONFIG.dailyFreeUses;
 }
 function markUsed() {
-    const today = new Date().toDateString();
-    const saved = localStorage.getItem('crispy_date');
-    let count = 0;
+    var today = new Date().toDateString();
+    var saved = localStorage.getItem('crispy_date');
+    var count = 0;
     if (saved === today) count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
     localStorage.setItem('crispy_date', today);
     localStorage.setItem('crispy_count', String(count + 1));
@@ -244,7 +251,7 @@ function markUsed() {
 /* ======================== MODALS ======================== */
 function showPremium() {
     els.premiumModal.classList.remove('hidden');
-    const card = els.premiumModal.querySelector('.modal-card');
+    var card = els.premiumModal.querySelector('.modal-card');
     card.style.animation = 'none';
     void card.offsetWidth;
     card.style.animation = '';
@@ -262,18 +269,18 @@ function hideError() { els.errorModal.classList.add('hidden'); }
 
 /* ======================== FILE HANDLING ======================== */
 function handleFileSelect(file) {
-    log('File selected:', { name: file.name, size: file.size, type: file.type });
+    log('File selected:', { name: file.name, size: formatBytes(file.size), type: file.type });
 
     if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) {
         showError('Not a video', 'Please select a video file to continue.');
         return;
     }
     if (file.size > CONFIG.maxFileSize * 1024 * 1024) {
-        showError('File too large', `Please pick a video under ${CONFIG.maxFileSize} MB.`);
+        showError('File too large', 'Please pick a video under ' + CONFIG.maxFileSize + ' MB.');
         return;
     }
     if (file.size < 10000) {
-        showError('File too small', 'This file seems too small to be a video. Please try another.');
+        showError('File too small', 'This file seems too small to be a video.');
         return;
     }
 
@@ -285,13 +292,13 @@ function handleFileSelect(file) {
     setButtonLoading(els.uploadBtn, true);
     els.trimVideo.src = state.objectUrl;
 
-    els.trimVideo.onloadedmetadata = () => {
+    els.trimVideo.onloadedmetadata = function() {
         setButtonLoading(els.uploadBtn, false);
         state.duration = els.trimVideo.duration;
-        log('Video duration:', state.duration);
+        log('Duration: ' + state.duration + 's');
 
         if (isNaN(state.duration) || state.duration < 0.5) {
-            showError('Invalid video', 'Could not read this video. Please try a different file.');
+            showError('Invalid video', 'Could not read this video. Try a different file.');
             return;
         }
         if (state.duration > CONFIG.maxDuration) {
@@ -303,21 +310,22 @@ function handleFileSelect(file) {
         }
     };
 
-    els.trimVideo.onerror = () => {
+    els.trimVideo.onerror = function() {
         setButtonLoading(els.uploadBtn, false);
-        showError('Unsupported format', 'This video format is not supported. Try an MP4 or MOV file.');
+        showError('Unsupported format', 'This video format is not supported. Try MP4 or MOV.');
     };
 }
 
 /* ======================== BUTTON LOADING ======================== */
 function setButtonLoading(btn, loading) {
-    btn.classList.toggle('loading', loading);
+    if (loading) btn.classList.add('loading');
+    else btn.classList.remove('loading');
 }
 
 /* ======================== TRIMMER ======================== */
 function setupTrimmer() {
-    const maxStart = Math.max(0, state.duration - CONFIG.maxDuration);
-    const clipDur = Math.min(CONFIG.maxDuration, state.duration);
+    var maxStart = Math.max(0, state.duration - CONFIG.maxDuration);
+    var clipDur = Math.min(CONFIG.maxDuration, state.duration);
     els.trimSlider.min = 0;
     els.trimSlider.max = maxStart;
     els.trimSlider.value = 0;
@@ -334,11 +342,11 @@ function setupTrimmer() {
 }
 
 function updateTrimUI() {
-    const start = parseFloat(els.trimSlider.value);
-    const dur = state.duration;
-    const clipDur = Math.min(CONFIG.maxDuration, dur);
-    const windowPct = (clipDur / dur) * 100;
-    const leftPct = (start / dur) * 100;
+    var start = parseFloat(els.trimSlider.value);
+    var dur = state.duration;
+    var clipDur = Math.min(CONFIG.maxDuration, dur);
+    var windowPct = (clipDur / dur) * 100;
+    var leftPct = (start / dur) * 100;
     els.trimWindow.style.width = windowPct + '%';
     els.trimWindow.style.left = leftPct + '%';
     els.trimStartTime.textContent = formatTime(start);
@@ -349,69 +357,60 @@ function updateTrimUI() {
 /* ======================== FFMPEG LOADING ======================== */
 async function loadFFmpeg() {
     if (state.ffmpegReady) {
-        log('FFmpeg already loaded, reusing');
+        log('FFmpeg already loaded');
         return;
     }
 
-    log('=== Loading FFmpeg ===');
+    log('=== Loading FFmpeg Engine ===');
 
-    // Step 1: Verify FFmpegWASM global exists
     if (typeof FFmpegWASM === 'undefined') {
-        logError('FFmpegWASM global not found');
+        logError('FFmpegWASM not found — CDN script did not load');
         throw new Error('SCRIPT_NOT_LOADED');
     }
-    log('FFmpegWASM global found ✅');
+    log('FFmpegWASM global: ✅');
 
-    // Step 2: Create instance
-    const { FFmpeg } = FFmpegWASM;
+    var FFmpeg = FFmpegWASM.FFmpeg;
     state.ffmpeg = new FFmpeg();
     log('FFmpeg instance created');
 
-    // Step 3: Attach logging
-    state.ffmpeg.on('log', ({ message }) => {
-        console.log('[FFmpeg]', message);
+    // Capture FFmpeg internal logs
+    state.ffmpeg.on('log', function(ev) {
+        console.log('[FFmpeg]', ev.message);
     });
 
-    state.ffmpeg.on('progress', ({ progress }) => {
-        const pct = Math.min(Math.round(progress * 100), 100);
+    // Progress tracking
+    state.ffmpeg.on('progress', function(ev) {
+        var pct = Math.min(Math.round(ev.progress * 100), 100);
         if (pct > 0) setProgress(pct);
     });
 
-    // Step 4: Load core — try each CDN with our own toBlobURL
-    let loaded = false;
-
-    for (const base of CONFIG.cdnUrls) {
+    // Try each CDN until one works
+    var loaded = false;
+    for (var i = 0; i < CONFIG.cdnUrls.length; i++) {
+        var base = CONFIG.cdnUrls[i];
         try {
             log('Trying CDN: ' + base);
             updateStatus('Downloading Crispy engine… ⬇️');
 
-            const coreURL = await toBlobURL(
-                base + '/ffmpeg-core.js',
-                'text/javascript'
-            );
-
-            const wasmURL = await toBlobURL(
-                base + '/ffmpeg-core.wasm',
-                'application/wasm'
-            );
+            var coreURL = await toBlobURL(base + '/ffmpeg-core.js', 'text/javascript');
+            var wasmURL = await toBlobURL(base + '/ffmpeg-core.wasm', 'application/wasm');
 
             updateStatus('Starting engine… 🔧');
-            log('Loading FFmpeg with blob URLs…');
+            log('Calling ffmpeg.load()…');
 
-            await state.ffmpeg.load({ coreURL, wasmURL });
+            await state.ffmpeg.load({ coreURL: coreURL, wasmURL: wasmURL });
 
             loaded = true;
-            log('FFmpeg loaded successfully from ' + base + ' ✅');
+            log('FFmpeg loaded from ' + base + ' ✅');
             break;
 
         } catch (err) {
             logError('CDN failed: ' + base, err.message || err);
-            // Try next CDN
         }
     }
 
     if (!loaded) {
-        logError('All CDNs failed to load FFmpeg');
+        logError('All CDNs failed');
         throw new Error('ENGINE_LOAD_FAILED');
     }
 
@@ -430,38 +429,35 @@ async function startProcessing() {
     startFunMessages();
 
     try {
-        // --------- STEP 1: Load engine ---------
-        log('=== STEP 1: Load FFmpeg ===');
+        // STEP 1: Load engine
+        log('=== STEP 1: Load engine ===');
         if (!state.ffmpegReady) {
             updateStatus('Loading Crispy engine… 🔧');
             await loadFFmpeg();
         } else {
-            log('FFmpeg was already loaded (preloaded or cached)');
+            log('Engine already loaded');
         }
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // --------- STEP 2: Read file into FFmpeg ---------
+        // STEP 2: Read file
         log('=== STEP 2: Read file ===');
         updateStatus('Reading your video… 📖');
 
-        const fileBuffer = await state.file.arrayBuffer();
-        log('File read into ArrayBuffer, bytes: ' + fileBuffer.byteLength);
+        var fileBuffer = await state.file.arrayBuffer();
+        log('ArrayBuffer size: ' + formatBytes(fileBuffer.byteLength));
 
-        const fileData = new Uint8Array(fileBuffer);
-        log('Converted to Uint8Array');
-
+        var fileData = new Uint8Array(fileBuffer);
         await state.ffmpeg.writeFile('input', fileData);
-        log('Written to FFmpeg virtual filesystem ✅');
+        log('Written to FFmpeg filesystem ✅');
 
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // --------- STEP 3: Run FFmpeg ---------
+        // STEP 3: Process
         log('=== STEP 3: Process video ===');
         updateStatus('Making it crispy… 🍳');
 
-        const clipDur = Math.min(CONFIG.maxDuration, state.duration);
-
-        const cmd = [
+        var clipDur = Math.min(CONFIG.maxDuration, state.duration);
+        var cmd = [
             '-y',
             '-ss', String(state.trimStart),
             '-i', 'input',
@@ -479,52 +475,48 @@ async function startProcessing() {
             '-movflags', '+faststart',
             'output.mp4',
         ];
+        log('Command: ffmpeg ' + cmd.join(' '));
 
-        log('FFmpeg command: ' + cmd.join(' '));
-
-        const exitCode = await state.ffmpeg.exec(cmd);
-        log('FFmpeg exit code: ' + exitCode);
+        var exitCode = await state.ffmpeg.exec(cmd);
+        log('Exit code: ' + exitCode);
 
         if (exitCode !== 0) {
-            logError('FFmpeg exited with error code ' + exitCode);
+            logError('FFmpeg returned error code ' + exitCode);
             throw new Error('FFMPEG_ERROR');
         }
-
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // --------- STEP 4: Read output ---------
+        // STEP 4: Read output
         log('=== STEP 4: Read output ===');
         updateStatus('Wrapping up… 🎁');
 
-        let outputData;
+        var outputData;
         try {
             outputData = await state.ffmpeg.readFile('output.mp4');
-            log('Output read, bytes: ' + outputData.byteLength);
+            log('Output size: ' + formatBytes(outputData.byteLength));
         } catch (readErr) {
-            logError('Failed to read output file', readErr);
+            logError('Cannot read output', readErr);
             throw new Error('OUTPUT_READ_FAILED');
         }
 
         if (!outputData || outputData.byteLength < 1000) {
-            logError('Output too small: ' + (outputData?.byteLength || 0));
+            logError('Output too small: ' + (outputData ? outputData.byteLength : 0));
             throw new Error('OUTPUT_EMPTY');
         }
 
-        // Create downloadable blob
         state.outputBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
         state.outputUrl = URL.createObjectURL(state.outputBlob);
         state.outputSize = state.outputBlob.size;
-        log('Output blob created: ' + formatBytes(state.outputSize));
+        log('Blob ready: ' + formatBytes(state.outputSize));
 
-        // --------- STEP 5: Cleanup FFmpeg temp files ---------
+        // Cleanup temp files
         try {
             await state.ffmpeg.deleteFile('input');
             await state.ffmpeg.deleteFile('output.mp4');
-            log('FFmpeg temp files cleaned');
         } catch (e) { /* ignore */ }
 
-        // --------- DONE ---------
-        log('=== PROCESSING COMPLETE ✅ ===');
+        // DONE
+        log('=== COMPLETE ✅ ===');
         haptic('success');
         showDone();
 
@@ -538,23 +530,22 @@ async function startProcessing() {
             return;
         }
 
-        logError('Processing failed', err);
+        logError('Failed', err);
 
-        let title = 'Processing Failed';
-        let msg = '';
-
+        var title = 'Processing Failed';
+        var msg = '';
         switch (err.message) {
             case 'SCRIPT_NOT_LOADED':
                 title = 'Engine Not Loaded';
-                msg = 'The video engine could not be loaded. Refresh the page and make sure you have internet.';
+                msg = 'The video engine could not load. Refresh the page and check your internet.';
                 break;
             case 'ENGINE_LOAD_FAILED':
                 title = 'Engine Download Failed';
-                msg = 'Could not download the processing engine. Check your internet connection and try again.';
+                msg = 'Could not download the processing engine. Check your internet and try again.';
                 break;
             case 'FFMPEG_ERROR':
                 title = 'Video Format Issue';
-                msg = 'This video format could not be processed. Try an MP4 video, or try a different file.';
+                msg = 'This video format could not be processed. Try a different MP4 video.';
                 break;
             case 'OUTPUT_READ_FAILED':
             case 'OUTPUT_EMPTY':
@@ -564,7 +555,6 @@ async function startProcessing() {
             default:
                 msg = 'Something went wrong. Try a different video or refresh the page.';
         }
-
         showError(title, msg);
         showScreen('home-screen');
 
@@ -584,18 +574,20 @@ function setProgress(pct) {
     els.progressFill.style.width = pct + '%';
     els.progressText.textContent = pct + ' %';
 }
+
 function updateStatus(msg) {
     els.processingStatus.style.opacity = '0';
-    setTimeout(() => {
+    setTimeout(function() {
         els.processingStatus.textContent = msg;
         els.processingStatus.style.opacity = '1';
     }, 150);
 }
 
-let funTimer = null, funIdx = 0;
+var funTimer = null;
+var funIdx = 0;
 function startFunMessages() {
     funIdx = 0;
-    funTimer = setInterval(() => {
+    funTimer = setInterval(function() {
         funIdx = (funIdx + 1) % FUN_MESSAGES.length;
         els.funTip.textContent = FUN_MESSAGES[funIdx];
     }, 3500);
@@ -606,8 +598,8 @@ function stopFunMessages() { clearInterval(funTimer); }
 function showDone() {
     els.statBefore.textContent = formatBytes(state.originalSize);
     els.statAfter.textContent = formatBytes(state.outputSize);
-    const saved = Math.max(0, Math.round((1 - state.outputSize / state.originalSize) * 100));
-    els.statSaved.textContent = saved > 0 ? '-' + saved + '%' : '✨ optimized';
+    var saved = Math.max(0, Math.round((1 - state.outputSize / state.originalSize) * 100));
+    els.statSaved.textContent = saved > 0 ? ('-' + saved + '%') : '✨ optimized';
 
     if (state.outputUrl) {
         els.donePreview.src = state.outputUrl;
@@ -620,14 +612,14 @@ function showDone() {
     els.tipsList.innerHTML = '';
 
     showScreen('done-screen');
-    setTimeout(() => fireConfetti(), 300);
+    setTimeout(function() { fireConfetti(); }, 300);
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
 function downloadVideo() {
     if (!state.outputUrl) return;
     haptic('medium');
-    const a = document.createElement('a');
+    var a = document.createElement('a');
     a.href = state.outputUrl;
     a.download = 'crispy-status.mp4';
     document.body.appendChild(a);
@@ -637,7 +629,7 @@ function downloadVideo() {
     showToast('Video saved! Post it to Status 🔥', 'success');
     if (!state.tipsShown) {
         state.tipsShown = true;
-        setTimeout(() => showTips(), 600);
+        setTimeout(function() { showTips(); }, 600);
     }
 }
 
@@ -645,13 +637,13 @@ function shareToWhatsApp() {
     if (!state.outputBlob) return;
     haptic('medium');
     if (navigator.canShare) {
-        const file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
-        const data = { files: [file] };
+        var file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
+        var data = { files: [file] };
         if (navigator.canShare(data)) {
-            navigator.share(data).then(() => {
+            navigator.share(data).then(function() {
                 markUsed();
                 showToast('Shared! 🚀', 'success');
-            }).catch(() => {});
+            }).catch(function() {});
             return;
         }
     }
@@ -662,8 +654,8 @@ function shareToWhatsApp() {
 function showTips() {
     els.tipsSection.classList.remove('hidden');
     els.tipsList.innerHTML = '';
-    QUALITY_TIPS.forEach((tip) => {
-        const card = document.createElement('div');
+    QUALITY_TIPS.forEach(function(tip) {
+        var card = document.createElement('div');
         card.className = 'tip-card';
         card.innerHTML =
             '<span class="tip-icon">' + tip.icon + '</span>' +
@@ -673,28 +665,28 @@ function showTips() {
             '</div>';
         els.tipsList.appendChild(card);
     });
-    setTimeout(() => {
+    setTimeout(function() {
         els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 350);
 }
 
 /* ======================== PWA INSTALL ======================== */
 function setupInstallPrompt() {
-    window.addEventListener('beforeinstallprompt', (e) => {
+    window.addEventListener('beforeinstallprompt', function(e) {
         e.preventDefault();
         state.installPrompt = e;
         if (!localStorage.getItem('crispy_install_dismissed')) {
-            setTimeout(() => { els.installPrompt.classList.remove('hidden'); }, 5000);
+            setTimeout(function() { els.installPrompt.classList.remove('hidden'); }, 5000);
         }
     });
-    els.installYes.addEventListener('click', async () => {
+    els.installYes.addEventListener('click', async function() {
         if (!state.installPrompt) return;
         await state.installPrompt.prompt();
         state.installPrompt = null;
         els.installPrompt.classList.add('hidden');
         showToast('Installed! 📲', 'success');
     });
-    els.installDismiss.addEventListener('click', () => {
+    els.installDismiss.addEventListener('click', function() {
         els.installPrompt.classList.add('hidden');
         localStorage.setItem('crispy_install_dismissed', 'true');
     });
@@ -711,7 +703,7 @@ function formatTime(s) {
 }
 function truncateFilename(n, max) {
     if (n.length <= max) return n;
-    const ext = n.split('.').pop();
+    var ext = n.split('.').pop();
     return n.substring(0, max - ext.length - 3) + '….' + ext;
 }
 function cleanup() {
@@ -729,18 +721,25 @@ function cleanup() {
 
 /* ======================== BACK BUTTON ======================== */
 function setupBackButton() {
-    window.addEventListener('popstate', () => {
+    window.addEventListener('popstate', function() {
         if (state.processing) {
             history.pushState({ screen: 'processing-screen' }, '', '');
             showToast('Processing in progress… Cancel first.', 'info');
             return;
         }
-        const current = document.querySelector('.screen.active');
+        var current = document.querySelector('.screen.active');
         if (current) {
             switch (current.id) {
-                case 'trim-screen': els.trimVideo.pause(); showScreen('home-screen'); break;
-                case 'done-screen': cleanup(); showScreen('home-screen'); break;
-                default: showScreen('home-screen');
+                case 'trim-screen':
+                    els.trimVideo.pause();
+                    showScreen('home-screen');
+                    break;
+                case 'done-screen':
+                    cleanup();
+                    showScreen('home-screen');
+                    break;
+                default:
+                    showScreen('home-screen');
             }
         }
     });
@@ -748,7 +747,7 @@ function setupBackButton() {
 
 /* ======================== BEFOREUNLOAD ======================== */
 function setupBeforeUnload() {
-    window.addEventListener('beforeunload', (e) => {
+    window.addEventListener('beforeunload', function(e) {
         if (state.processing) { e.preventDefault(); e.returnValue = ''; }
     });
 }
@@ -757,39 +756,41 @@ function setupBeforeUnload() {
 function bindEvents() {
 
     /* Home */
-    els.uploadBtn.addEventListener('click', () => {
+    els.uploadBtn.addEventListener('click', function() {
         if (!canUseToday()) { showPremium(); return; }
         haptic('light');
         els.fileInput.click();
     });
-    els.fileInput.addEventListener('change', (e) => {
-        const f = e.target.files && e.target.files[0];
+    els.fileInput.addEventListener('change', function(e) {
+        var f = e.target.files && e.target.files[0];
         if (f) handleFileSelect(f);
     });
 
     /* Trim */
-    els.trimBackBtn.addEventListener('click', () => {
+    els.trimBackBtn.addEventListener('click', function() {
         haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
     });
 
-    let seekDebounce;
-    els.trimSlider.addEventListener('input', () => {
+    var seekDebounce;
+    els.trimSlider.addEventListener('input', function() {
         updateTrimUI();
         clearTimeout(seekDebounce);
-        seekDebounce = setTimeout(() => { els.trimVideo.currentTime = state.trimStart; }, 60);
+        seekDebounce = setTimeout(function() {
+            els.trimVideo.currentTime = state.trimStart;
+        }, 60);
     });
 
-    els.playPreviewBtn.addEventListener('click', () => {
+    els.playPreviewBtn.addEventListener('click', function() {
         haptic('light');
-        const v = els.trimVideo;
+        var v = els.trimVideo;
         if (v.paused) {
             v.currentTime = state.trimStart;
             v.muted = false;
             v.play();
             els.playPreviewBtn.textContent = '⏸';
             els.playPreviewBtn.classList.add('hide');
-            const stopAt = state.trimStart + CONFIG.maxDuration;
-            const stop = () => {
+            var stopAt = state.trimStart + CONFIG.maxDuration;
+            var stop = function() {
                 if (v.currentTime >= stopAt) {
                     v.pause();
                     v.removeEventListener('timeupdate', stop);
@@ -805,24 +806,24 @@ function bindEvents() {
         }
     });
 
-    els.trimVideo.addEventListener('click', () => { els.playPreviewBtn.click(); });
+    els.trimVideo.addEventListener('click', function() { els.playPreviewBtn.click(); });
 
-    els.trimContinueBtn.addEventListener('click', () => {
+    els.trimContinueBtn.addEventListener('click', function() {
         haptic('medium'); els.trimVideo.pause(); startProcessing();
     });
 
     /* Processing */
-    els.cancelBtn.addEventListener('click', () => { haptic('light'); cancelProcessing(); });
+    els.cancelBtn.addEventListener('click', function() { haptic('light'); cancelProcessing(); });
 
     /* Done */
-    els.donePlayBtn.addEventListener('click', () => {
+    els.donePlayBtn.addEventListener('click', function() {
         haptic('light');
-        const v = els.donePreview;
+        var v = els.donePreview;
         if (v.paused) { v.play(); els.donePlayBtn.classList.add('hide'); }
         else { v.pause(); els.donePlayBtn.classList.remove('hide'); }
     });
-    els.donePreview.addEventListener('click', () => { els.donePlayBtn.click(); });
-    els.donePreview.addEventListener('ended', () => {
+    els.donePreview.addEventListener('click', function() { els.donePlayBtn.click(); });
+    els.donePreview.addEventListener('ended', function() {
         els.donePlayBtn.classList.remove('hide');
         els.donePlayBtn.textContent = '▶';
     });
@@ -830,7 +831,7 @@ function bindEvents() {
     els.downloadBtn.addEventListener('click', downloadVideo);
     els.shareBtn.addEventListener('click', shareToWhatsApp);
 
-    els.newVideoBtn.addEventListener('click', () => {
+    els.newVideoBtn.addEventListener('click', function() {
         haptic('light');
         if (!canUseToday()) { showPremium(); return; }
         cleanup();
@@ -838,20 +839,20 @@ function bindEvents() {
     });
 
     /* Modals */
-    els.premiumCloseBtn.addEventListener('click', () => { haptic('light'); hidePremium(); });
-    els.upgradeBtn.addEventListener('click', () => { haptic('medium'); showToast('Premium coming soon! 🚀', 'info'); });
-    els.errorCloseBtn.addEventListener('click', () => { haptic('light'); hideError(); showScreen('home-screen'); });
-    els.premiumModal.addEventListener('click', (e) => { if (e.target === els.premiumModal) hidePremium(); });
-    els.errorModal.addEventListener('click', (e) => { if (e.target === els.errorModal) hideError(); });
+    els.premiumCloseBtn.addEventListener('click', function() { haptic('light'); hidePremium(); });
+    els.upgradeBtn.addEventListener('click', function() { haptic('medium'); showToast('Premium coming soon! 🚀', 'info'); });
+    els.errorCloseBtn.addEventListener('click', function() { haptic('light'); hideError(); showScreen('home-screen'); });
+    els.premiumModal.addEventListener('click', function(e) { if (e.target === els.premiumModal) hidePremium(); });
+    els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
 
-    document.addEventListener('keydown', (e) => {
+    document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             if (!els.premiumModal.classList.contains('hidden')) hidePremium();
             if (!els.errorModal.classList.contains('hidden')) hideError();
         }
     });
 
-    window.addEventListener('resize', () => {
+    window.addEventListener('resize', function() {
         els.confettiCanvas.width = window.innerWidth;
         els.confettiCanvas.height = window.innerHeight;
     });
@@ -860,19 +861,19 @@ function bindEvents() {
 /* ======================== SERVICE WORKER ======================== */
 function registerSW() {
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(() => {});
+        navigator.serviceWorker.register('sw.js').catch(function() {});
     }
 }
 
 /* ======================== PRELOAD ======================== */
 function preloadFFmpeg() {
-    setTimeout(() => {
+    setTimeout(function() {
         if (!state.ffmpegReady) {
             log('Preloading FFmpeg in background…');
-            loadFFmpeg().then(() => {
+            loadFFmpeg().then(function() {
                 log('Background preload complete ✅');
-            }).catch((err) => {
-                log('Background preload failed (will retry on use): ' + (err.message || err));
+            }).catch(function(err) {
+                log('Background preload failed (will retry): ' + (err.message || err));
             });
         }
     }, 4000);
@@ -884,14 +885,13 @@ function init() {
 
     if (typeof WebAssembly === 'undefined') {
         showError('Browser Not Supported',
-            'Your browser does not support WebAssembly. Please use Chrome, Firefox, Safari, or Edge.');
+            'Your browser does not support WebAssembly. Use Chrome, Firefox, Safari, or Edge.');
         return;
     }
     log('WebAssembly: ✅');
 
     if (typeof SharedArrayBuffer === 'undefined') {
-        log('⚠️ SharedArrayBuffer not available — FFmpeg will use single-threaded mode');
-        log('This is normal on most mobile browsers and will work fine');
+        log('SharedArrayBuffer: not available (single-threaded mode — this is fine)');
     } else {
         log('SharedArrayBuffer: ✅');
     }
