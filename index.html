@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Crispy Status — Sharp Status. Every Time.</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0B0B1A">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos!">
+
+    <!-- Font: Nunito — big, roundy, fun -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+
+    <!-- Styles (separate file) -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+    <!-- ======================== HOME SCREEN ======================== -->
+    <section id="home-screen" class="screen active">
+        <div class="screen-content">
+
+            <div class="logo-area">
+                <div class="logo-icon" aria-hidden="true">🔥</div>
+                <h1 class="logo-text">Crispy Status</h1>
+                <p class="tagline">Sharp status. Every time.</p>
+            </div>
+
+            <button id="upload-btn" class="btn btn-primary btn-large pulse-glow" aria-label="Select a video to optimize">
+                <span class="btn-icon" aria-hidden="true">🎬</span>
+                <span class="btn-text">Make Your Video Crispy</span>
+            </button>
+            <input type="file" id="file-input" accept="video/*" hidden>
+
+            <div class="how-it-works">
+                <p class="section-label">How it works</p>
+                <div class="steps">
+                    <div class="step"><span class="step-num">1</span><span class="step-text">Pick a video</span></div>
+                    <div class="step"><span class="step-num">2</span><span class="step-text">We optimize it</span></div>
+                    <div class="step"><span class="step-num">3</span><span class="step-text">Post blur-free</span></div>
+                </div>
+            </div>
+
+        </div>
+        <div class="ad-banner" id="ad-home">
+            <span class="ad-placeholder">Ad Space</span>
+        </div>
+    </section>
+
+    <!-- ======================== TRIM SCREEN ======================== -->
+    <section id="trim-screen" class="screen">
+        <div class="screen-content">
+
+            <div class="screen-header">
+                <button id="trim-back-btn" class="btn-icon-only" aria-label="Go back">←</button>
+                <h2>Pick Your Moment ✂️</h2>
+            </div>
+
+            <div class="video-preview-wrap">
+                <video id="trim-video" playsinline muted></video>
+                <button id="play-preview-btn" class="btn-play" aria-label="Play preview">▶</button>
+            </div>
+
+            <div class="trim-controls">
+                <div class="trim-track-wrap">
+                    <div class="trim-track">
+                        <div id="trim-window" class="trim-window"></div>
+                    </div>
+                    <input type="range" id="trim-slider" min="0" max="100" value="0" step="0.1"
+                           aria-label="Select start position">
+                </div>
+                <div class="trim-times">
+                    <span id="trim-start-time">0:00</span>
+                    <span class="trim-duration-label">30 sec selected</span>
+                    <span id="trim-end-time">0:30</span>
+                </div>
+            </div>
+
+            <button id="trim-continue-btn" class="btn btn-primary btn-large">
+                <span class="btn-icon" aria-hidden="true">✨</span>
+                <span class="btn-text">Make It Crispy</span>
+            </button>
+
+        </div>
+    </section>
+
+    <!-- ======================== PROCESSING SCREEN ======================== -->
+    <section id="processing-screen" class="screen">
+        <div class="screen-content centered">
+
+            <div class="processing-vis">
+                <div class="processing-emoji" aria-hidden="true">🍳</div>
+                <h2 class="processing-title">Making it crispy…</h2>
+                <p class="processing-sub" id="processing-status">Loading video engine…</p>
+            </div>
+
+            <div class="progress-wrap">
+                <div class="progress-track">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <span id="progress-text" class="progress-pct">0 %</span>
+            </div>
+
+            <p class="processing-fun-tip" id="fun-tip">💡 Crispy videos get more views!</p>
+
+        </div>
+    </section>
+
+    <!-- ======================== DONE SCREEN ======================== -->
+    <section id="done-screen" class="screen">
+        <div class="screen-content">
+
+            <div class="done-header">
+                <div class="done-emoji" aria-hidden="true">✅</div>
+                <h2>Video is Crispy!</h2>
+            </div>
+
+            <div class="stats-card">
+                <div class="stat">
+                    <span class="stat-label">Before</span>
+                    <span class="stat-value" id="stat-before">—</span>
+                </div>
+                <div class="stat-arrow" aria-hidden="true">→</div>
+                <div class="stat">
+                    <span class="stat-label">After</span>
+                    <span class="stat-value highlight" id="stat-after">—</span>
+                </div>
+                <div class="stat-badge" id="stat-saved">—</div>
+            </div>
+
+            <div class="action-btns">
+                <button id="download-btn" class="btn btn-primary btn-large">
+                    <span class="btn-icon" aria-hidden="true">⬇️</span>
+                    <span class="btn-text">Download Video</span>
+                </button>
+                <button id="share-btn" class="btn btn-secondary">
+                    <span class="btn-icon" aria-hidden="true">📤</span>
+                    <span class="btn-text">Share to WhatsApp</span>
+                </button>
+            </div>
+
+            <!-- Tips appear here after download is pressed -->
+            <div id="tips-section" class="tips-section hidden">
+                <p class="section-label">💡 Keep it sharp:</p>
+                <div id="tips-list" class="tips-list"></div>
+            </div>
+
+            <button id="new-video-btn" class="btn btn-ghost">🎬 Crispy another video</button>
+
+        </div>
+        <div class="ad-banner" id="ad-done">
+            <span class="ad-placeholder">Ad Space</span>
+        </div>
+    </section>
+
+    <!-- ======================== PREMIUM MODAL ======================== -->
+    <div id="premium-modal" class="modal-overlay hidden" role="dialog" aria-modal="true"
+         aria-labelledby="premium-heading">
+        <div class="modal-card">
+            <div class="premium-badge" aria-hidden="true">🔥 PRO</div>
+            <h2 id="premium-heading">Go Unlimited</h2>
+            <p class="premium-sub">You've used your free video for today!</p>
+
+            <ul class="premium-perks">
+                <li><span>✅</span> Unlimited videos</li>
+                <li><span>⚡</span> Faster processing</li>
+                <li><span>🚫</span> No ads</li>
+                <li><span>📦</span> Batch processing</li>
+                <li><span>🎬</span> 1080p output</li>
+            </ul>
+
+            <button id="upgrade-btn" class="btn btn-premium">Upgrade — $2.99/mo</button>
+            <button id="premium-close-btn" class="btn btn-ghost">Maybe later</button>
+        </div>
+    </div>
+
+    <!-- ======================== ERROR MODAL ======================== -->
+    <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
+         aria-labelledby="error-heading">
+        <div class="modal-card">
+            <div class="error-emoji" aria-hidden="true">😬</div>
+            <h2 id="error-heading">Oops!</h2>
+            <p id="error-msg">Something went wrong.</p>
+            <button id="error-close-btn" class="btn btn-primary">Try Again</button>
+        </div>
+    </div>
+
+</div>
+
+<!-- FFmpeg WASM (loaded from CDN, runs on device) -->
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+
+<!-- App logic (separate file) -->
+<script src="app.js"></script>
+</body>
+</html>
