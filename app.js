@@ -1,29 +1,44 @@
 /* ==========================================================
-   CRISPY STATUS — App Logic (CORS Worker Fix)
-
-   Fixes applied:
-   1. Worker CORS patch in HTML handles cross-origin Workers
-   2. Custom toBlobURL replaces @ffmpeg/util dependency
-   3. Direct ArrayBuffer reading for file input
-   4. Comprehensive error handling and logging
+   CRISPY STATUS — App Logic
+   
+   Quality Engine v2:
+   - Smart resolution detection (portrait vs landscape)
+   - CRF-based encoding (quality per frame, not fixed bitrate)
+   - H.264 Main Profile 3.1 (WhatsApp's native format)
+   - File size optimized to stay under WhatsApp's re-compression threshold
+   - Keyframe interval matched to WhatsApp's expectations
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
-const CONFIG = {
+var CONFIG = {
     maxDuration   : 30,
     maxFileSize   : 500,
     dailyFreeUses : 1,
-    outputWidth   : 720,
-    videoBitrate  : '4M',
-    audioBitrate  : '128k',
-    fps           : 30,
+
+    // Quality settings optimized for WhatsApp Status
+    // The goal: output a file so close to WhatsApp's internal format
+    // that WhatsApp has almost nothing left to compress
+    quality: {
+        shortSide   : 540,     // pixels on the shorter dimension
+        crf         : 23,      // quality level (18=high, 23=balanced, 28=small)
+        maxBitrate  : '2500k', // cap to prevent file size spikes
+        bufSize     : '5000k', // rate control buffer
+        audioBitrate: '128k',
+        audioRate   : 44100,
+        fps         : 30,
+        preset      : 'fast',  // encoding speed vs compression efficiency
+        profile     : 'main',  // H.264 profile WhatsApp uses internally
+        level       : '3.1',   // H.264 level
+        keyint      : 30,      // keyframe every 1 second (fps / 1)
+    },
+
     cdnUrls: [
         'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd',
         'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd',
     ],
 };
 
-const FUN_MESSAGES = [
+var FUN_MESSAGES = [
     '🍳 Frying up the pixels…',
     '✨ Sharpening every frame…',
     '🧹 Sweeping away the blur…',
@@ -36,26 +51,29 @@ const FUN_MESSAGES = [
     '🚀 Almost there…',
 ];
 
-const QUALITY_TIPS = [
+var QUALITY_TIPS = [
     { icon: '📱', title: 'Post directly to Status',
-      text: 'Open WhatsApp → Status tab → pick the crispy video from your gallery.' },
-    { icon: '🚫', title: "Don't re-edit the video",
-      text: 'Any editing after download may re-compress and reduce quality.' },
-    { icon: '📂', title: 'Use the original file',
-      text: 'Never screenshot or screen-record your video — always use the downloaded file.' },
-    { icon: '⚡', title: 'Post it right away',
-      text: 'Upload to Status soon after downloading. Some phones re-compress stored videos.' },
-    { icon: '📐', title: 'Film vertical next time',
-      text: '9:16 vertical videos fill the entire Status screen perfectly.' },
+      text: 'Open WhatsApp → Status tab → pick the crispy video from your gallery. Don\'t use any other app to send it.' },
+    { icon: '🚫', title: 'Don\'t re-edit the video',
+      text: 'Any editing, filtering, or trimming after download will re-compress and kill the quality.' },
+    { icon: '📂', title: 'Use the downloaded file only',
+      text: 'Never screenshot or screen-record your video. Always use the actual downloaded MP4 file.' },
+    { icon: '⚡', title: 'Post it immediately',
+      text: 'Some phones re-compress videos in your gallery over time. Post to Status right after downloading.' },
+    { icon: '🔄', title: 'Don\'t forward the Status',
+      text: 'Forwarding a Status video compresses it again. Ask people to save the original instead.' },
 ];
 
 /* ======================== STATE ======================== */
-const state = {
+var state = {
     file         : null,
     objectUrl    : null,
     duration     : 0,
     trimStart    : 0,
     originalSize : 0,
+    videoWidth   : 0,
+    videoHeight  : 0,
+    isPortrait   : true,
     outputBlob   : null,
     outputUrl    : null,
     outputSize   : 0,
@@ -77,7 +95,7 @@ function logError(msg, err) {
     console.error('[Crispy ERROR] ' + msg, err);
 }
 
-/* ======================== DOM REFS ======================== */
+/* ======================== DOM ======================== */
 function $(id) { return document.getElementById(id); }
 
 var els = {
@@ -125,30 +143,25 @@ var els = {
     confettiCanvas   : $('confetti-canvas'),
 };
 
-/* ======================== toBlobURL ========================
-   Replaces @ffmpeg/util entirely.
-   Fetches a remote file and converts it to a local blob URL
-   so FFmpeg core can load it without CORS issues.
-   ========================================================== */
+/* ======================== toBlobURL ======================== */
 async function toBlobURL(url, mimeType) {
     log('Fetching: ' + url);
     var response = await fetch(url);
-    if (!response.ok) throw new Error('HTTP ' + response.status + ' fetching ' + url);
+    if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
     var buffer = await response.arrayBuffer();
     var blob = new Blob([buffer], { type: mimeType });
     var blobUrl = URL.createObjectURL(blob);
-    log('Blob URL ready for: ' + url.split('/').pop() + ' (' + formatBytes(buffer.byteLength) + ')');
+    log('Blob ready: ' + url.split('/').pop() + ' (' + formatBytes(buffer.byteLength) + ')');
     return blobUrl;
 }
 
-/* ======================== SCREEN NAV ======================== */
+/* ======================== SCREENS ======================== */
 function showScreen(id) {
     log('Screen → ' + id);
     document.querySelectorAll('.screen').forEach(function(s) {
         s.classList.remove('active', 'screen-enter');
     });
-    var target = $(id);
-    target.classList.add('active', 'screen-enter');
+    $(id).classList.add('active', 'screen-enter');
     window.scrollTo({ top: 0, behavior: 'instant' });
     if (!history.state || history.state.screen !== id) {
         history.pushState({ screen: id }, '', '');
@@ -163,7 +176,7 @@ function showToast(message, type, duration) {
     var toast = document.createElement('div');
     toast.className = 'toast ' + type;
     var icons = { success: '✅', error: '❌', info: '💡' };
-    toast.innerHTML = '<span class="toast-icon">' + (icons[type] || icons.info) + '</span><span>' + message + '</span>';
+    toast.innerHTML = '<span class="toast-icon">' + (icons[type] || '💡') + '</span><span>' + message + '</span>';
     container.appendChild(toast);
     setTimeout(function() {
         toast.classList.add('toast-out');
@@ -195,29 +208,25 @@ function fireConfetti() {
         });
     }
     var frame = 0;
-    var maxFrames = 150;
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         particles.forEach(function(p) {
             p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.99;
             p.rotation += p.rotSpeed;
-            p.opacity = Math.max(0, 1 - frame / maxFrames);
-            ctx.save();
-            ctx.globalAlpha = p.opacity;
+            p.opacity = Math.max(0, 1 - frame / 150);
+            ctx.save(); ctx.globalAlpha = p.opacity;
             ctx.translate(p.x, p.y);
-            ctx.rotate((p.rotation * Math.PI) / 180);
+            ctx.rotate(p.rotation * Math.PI / 180);
             ctx.fillStyle = p.color;
             if (p.shape === 'circle') {
-                ctx.beginPath();
-                ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.beginPath(); ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2); ctx.fill();
             } else {
                 ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
             }
             ctx.restore();
         });
         frame++;
-        if (frame < maxFrames) requestAnimationFrame(draw);
+        if (frame < 150) requestAnimationFrame(draw);
         else ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
     requestAnimationFrame(draw);
@@ -225,10 +234,9 @@ function fireConfetti() {
 
 /* ======================== HAPTIC ======================== */
 function haptic(style) {
-    style = style || 'light';
     if (!navigator.vibrate) return;
-    var patterns = { light: [12], medium: [25], heavy: [50], success: [15, 50, 15] };
-    navigator.vibrate(patterns[style] || patterns.light);
+    var p = { light: [12], medium: [25], heavy: [50], success: [15, 50, 15] };
+    navigator.vibrate(p[style || 'light'] || [12]);
 }
 
 /* ======================== DAILY LIMIT ======================== */
@@ -252,9 +260,7 @@ function markUsed() {
 function showPremium() {
     els.premiumModal.classList.remove('hidden');
     var card = els.premiumModal.querySelector('.modal-card');
-    card.style.animation = 'none';
-    void card.offsetWidth;
-    card.style.animation = '';
+    card.style.animation = 'none'; void card.offsetWidth; card.style.animation = '';
     haptic('medium');
 }
 function hidePremium() { els.premiumModal.classList.add('hidden'); }
@@ -269,10 +275,10 @@ function hideError() { els.errorModal.classList.add('hidden'); }
 
 /* ======================== FILE HANDLING ======================== */
 function handleFileSelect(file) {
-    log('File selected:', { name: file.name, size: formatBytes(file.size), type: file.type });
+    log('File:', { name: file.name, size: formatBytes(file.size), type: file.type });
 
     if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) {
-        showError('Not a video', 'Please select a video file to continue.');
+        showError('Not a video', 'Please select a video file.');
         return;
     }
     if (file.size > CONFIG.maxFileSize * 1024 * 1024) {
@@ -295,7 +301,17 @@ function handleFileSelect(file) {
     els.trimVideo.onloadedmetadata = function() {
         setButtonLoading(els.uploadBtn, false);
         state.duration = els.trimVideo.duration;
-        log('Duration: ' + state.duration + 's');
+
+        // Detect video orientation
+        state.videoWidth = els.trimVideo.videoWidth;
+        state.videoHeight = els.trimVideo.videoHeight;
+        state.isPortrait = state.videoHeight >= state.videoWidth;
+
+        log('Video info:', {
+            duration: state.duration + 's',
+            dimensions: state.videoWidth + 'x' + state.videoHeight,
+            orientation: state.isPortrait ? 'portrait' : 'landscape'
+        });
 
         if (isNaN(state.duration) || state.duration < 0.5) {
             showError('Invalid video', 'Could not read this video. Try a different file.');
@@ -316,7 +332,6 @@ function handleFileSelect(file) {
     };
 }
 
-/* ======================== BUTTON LOADING ======================== */
 function setButtonLoading(btn, loading) {
     if (loading) btn.classList.add('loading');
     else btn.classList.remove('loading');
@@ -345,46 +360,34 @@ function updateTrimUI() {
     var start = parseFloat(els.trimSlider.value);
     var dur = state.duration;
     var clipDur = Math.min(CONFIG.maxDuration, dur);
-    var windowPct = (clipDur / dur) * 100;
-    var leftPct = (start / dur) * 100;
-    els.trimWindow.style.width = windowPct + '%';
-    els.trimWindow.style.left = leftPct + '%';
+    els.trimWindow.style.width = (clipDur / dur) * 100 + '%';
+    els.trimWindow.style.left = (start / dur) * 100 + '%';
     els.trimStartTime.textContent = formatTime(start);
     els.trimEndTime.textContent = formatTime(start + clipDur);
     state.trimStart = start;
 }
 
-/* ======================== FFMPEG LOADING ======================== */
+/* ======================== FFMPEG ======================== */
 async function loadFFmpeg() {
-    if (state.ffmpegReady) {
-        log('FFmpeg already loaded');
-        return;
-    }
+    if (state.ffmpegReady) { log('FFmpeg already loaded'); return; }
 
-    log('=== Loading FFmpeg Engine ===');
+    log('=== Loading FFmpeg ===');
 
     if (typeof FFmpegWASM === 'undefined') {
-        logError('FFmpegWASM not found — CDN script did not load');
+        logError('FFmpegWASM not found');
         throw new Error('SCRIPT_NOT_LOADED');
     }
-    log('FFmpegWASM global: ✅');
 
-    var FFmpeg = FFmpegWASM.FFmpeg;
-    state.ffmpeg = new FFmpeg();
-    log('FFmpeg instance created');
+    state.ffmpeg = new FFmpegWASM.FFmpeg();
 
-    // Capture FFmpeg internal logs
     state.ffmpeg.on('log', function(ev) {
         console.log('[FFmpeg]', ev.message);
     });
-
-    // Progress tracking
     state.ffmpeg.on('progress', function(ev) {
         var pct = Math.min(Math.round(ev.progress * 100), 100);
         if (pct > 0) setProgress(pct);
     });
 
-    // Try each CDN until one works
     var loaded = false;
     for (var i = 0; i < CONFIG.cdnUrls.length; i++) {
         var base = CONFIG.cdnUrls[i];
@@ -396,26 +399,51 @@ async function loadFFmpeg() {
             var wasmURL = await toBlobURL(base + '/ffmpeg-core.wasm', 'application/wasm');
 
             updateStatus('Starting engine… 🔧');
-            log('Calling ffmpeg.load()…');
-
             await state.ffmpeg.load({ coreURL: coreURL, wasmURL: wasmURL });
 
             loaded = true;
-            log('FFmpeg loaded from ' + base + ' ✅');
+            log('FFmpeg loaded ✅ from ' + base);
             break;
-
         } catch (err) {
             logError('CDN failed: ' + base, err.message || err);
         }
     }
 
-    if (!loaded) {
-        logError('All CDNs failed');
-        throw new Error('ENGINE_LOAD_FAILED');
-    }
-
+    if (!loaded) throw new Error('ENGINE_LOAD_FAILED');
     state.ffmpegReady = true;
-    log('FFmpeg engine ready ✅');
+}
+
+/* ======================== SMART SCALE FILTER ========================
+   Builds the optimal scale filter based on video orientation.
+   
+   Strategy: Scale the SHORTER side to 540px.
+   - Portrait video (1080x1920) → 540x960
+   - Landscape video (1920x1080) → 960x540
+   - Square video (1080x1080) → 540x540
+   
+   The -2 ensures dimensions are divisible by 2 (required by H.264).
+   ================================================================== */
+function buildScaleFilter() {
+    var shortSide = CONFIG.quality.shortSide;
+
+    if (state.isPortrait) {
+        // Width is the shorter side
+        // If already smaller than target, don't upscale
+        if (state.videoWidth <= shortSide) {
+            log('Video already small enough, no resize needed');
+            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        }
+        log('Portrait: scaling width to ' + shortSide + 'px');
+        return 'scale=' + shortSide + ':-2';
+    } else {
+        // Height is the shorter side
+        if (state.videoHeight <= shortSide) {
+            log('Video already small enough, no resize needed');
+            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        }
+        log('Landscape: scaling height to ' + shortSide + 'px');
+        return 'scale=-2:' + shortSide;
+    }
 }
 
 /* ======================== PROCESSING ======================== */
@@ -430,484 +458,72 @@ async function startProcessing() {
 
     try {
         // STEP 1: Load engine
-        log('=== STEP 1: Load engine ===');
         if (!state.ffmpegReady) {
             updateStatus('Loading Crispy engine… 🔧');
             await loadFFmpeg();
-        } else {
-            log('Engine already loaded');
         }
         if (state.cancelled) throw new Error('CANCELLED');
 
         // STEP 2: Read file
-        log('=== STEP 2: Read file ===');
         updateStatus('Reading your video… 📖');
-
-        var fileBuffer = await state.file.arrayBuffer();
-        log('ArrayBuffer size: ' + formatBytes(fileBuffer.byteLength));
-
-        var fileData = new Uint8Array(fileBuffer);
+        var fileData = new Uint8Array(await state.file.arrayBuffer());
+        log('File read: ' + formatBytes(fileData.byteLength));
         await state.ffmpeg.writeFile('input', fileData);
-        log('Written to FFmpeg filesystem ✅');
-
+        log('Written to FFmpeg ✅');
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 3: Process
-        log('=== STEP 3: Process video ===');
+        // STEP 3: Build optimized command
         updateStatus('Making it crispy… 🍳');
-
+        var q = CONFIG.quality;
         var clipDur = Math.min(CONFIG.maxDuration, state.duration);
+        var scaleFilter = buildScaleFilter();
+
         var cmd = [
             '-y',
             '-ss', String(state.trimStart),
             '-i', 'input',
             '-t', String(clipDur),
-            '-vf', 'scale=' + CONFIG.outputWidth + ':-2',
+
+            // Video filters: scale + force even dimensions
+            '-vf', scaleFilter,
+
+            // H.264 encoding — matched to WhatsApp's internal format
             '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-b:v', CONFIG.videoBitrate,
-            '-maxrate', '5M',
-            '-bufsize', '8M',
-            '-c:a', 'aac',
-            '-b:a', CONFIG.audioBitrate,
-            '-r', String(CONFIG.fps),
+            '-preset', q.preset,
+            '-crf', String(q.crf),
+            '-profile:v', q.profile,
+            '-level', q.level,
+            '-maxrate', q.maxBitrate,
+            '-bufsize', q.bufSize,
+
+            // Keyframe interval: 1 keyframe per second
+            // This helps WhatsApp process the video cleanly
+            '-g', String(q.keyint),
+            '-keyint_min', String(q.keyint),
+
+            // Frame rate
+            '-r', String(q.fps),
+
+            // Pixel format (required for maximum compatibility)
             '-pix_fmt', 'yuv420p',
+
+            // Audio — AAC at standard broadcast quality
+            '-c:a', 'aac',
+            '-b:a', q.audioBitrate,
+            '-ar', String(q.audioRate),
+            '-ac', '2',
+
+            // Place metadata at start of file for instant playback
             '-movflags', '+faststart',
-            'output.mp4',
+
+            'output.mp4'
         ];
-        log('Command: ffmpeg ' + cmd.join(' '));
+
+        log('FFmpeg command: ffmpeg ' + cmd.join(' '));
+        log('Expected output: ~' + estimateFileSize(clipDur) + ' for ' + clipDur + 's');
 
         var exitCode = await state.ffmpeg.exec(cmd);
         log('Exit code: ' + exitCode);
 
-        if (exitCode !== 0) {
-            logError('FFmpeg returned error code ' + exitCode);
-            throw new Error('FFMPEG_ERROR');
-        }
-        if (state.cancelled) throw new Error('CANCELLED');
-
-        // STEP 4: Read output
-        log('=== STEP 4: Read output ===');
-        updateStatus('Wrapping up… 🎁');
-
-        var outputData;
-        try {
-            outputData = await state.ffmpeg.readFile('output.mp4');
-            log('Output size: ' + formatBytes(outputData.byteLength));
-        } catch (readErr) {
-            logError('Cannot read output', readErr);
-            throw new Error('OUTPUT_READ_FAILED');
-        }
-
-        if (!outputData || outputData.byteLength < 1000) {
-            logError('Output too small: ' + (outputData ? outputData.byteLength : 0));
-            throw new Error('OUTPUT_EMPTY');
-        }
-
-        state.outputBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
-        state.outputUrl = URL.createObjectURL(state.outputBlob);
-        state.outputSize = state.outputBlob.size;
-        log('Blob ready: ' + formatBytes(state.outputSize));
-
-        // Cleanup temp files
-        try {
-            await state.ffmpeg.deleteFile('input');
-            await state.ffmpeg.deleteFile('output.mp4');
-        } catch (e) { /* ignore */ }
-
-        // DONE
-        log('=== COMPLETE ✅ ===');
-        haptic('success');
-        showDone();
-
-    } catch (err) {
-        stopFunMessages();
-
-        if (err.message === 'CANCELLED') {
-            log('Cancelled by user');
-            showToast('Processing cancelled', 'info');
-            showScreen('home-screen');
-            return;
-        }
-
-        logError('Failed', err);
-
-        var title = 'Processing Failed';
-        var msg = '';
-        switch (err.message) {
-            case 'SCRIPT_NOT_LOADED':
-                title = 'Engine Not Loaded';
-                msg = 'The video engine could not load. Refresh the page and check your internet.';
-                break;
-            case 'ENGINE_LOAD_FAILED':
-                title = 'Engine Download Failed';
-                msg = 'Could not download the processing engine. Check your internet and try again.';
-                break;
-            case 'FFMPEG_ERROR':
-                title = 'Video Format Issue';
-                msg = 'This video format could not be processed. Try a different MP4 video.';
-                break;
-            case 'OUTPUT_READ_FAILED':
-            case 'OUTPUT_EMPTY':
-                title = 'Processing Error';
-                msg = 'The output was empty. Try a shorter or smaller video.';
-                break;
-            default:
-                msg = 'Something went wrong. Try a different video or refresh the page.';
-        }
-        showError(title, msg);
-        showScreen('home-screen');
-
-    } finally {
-        state.processing = false;
-        stopFunMessages();
-    }
-}
-
-function cancelProcessing() {
-    state.cancelled = true;
-    showToast('Cancelling…', 'info', 2000);
-}
-
-/* ======================== PROGRESS ======================== */
-function setProgress(pct) {
-    els.progressFill.style.width = pct + '%';
-    els.progressText.textContent = pct + ' %';
-}
-
-function updateStatus(msg) {
-    els.processingStatus.style.opacity = '0';
-    setTimeout(function() {
-        els.processingStatus.textContent = msg;
-        els.processingStatus.style.opacity = '1';
-    }, 150);
-}
-
-var funTimer = null;
-var funIdx = 0;
-function startFunMessages() {
-    funIdx = 0;
-    funTimer = setInterval(function() {
-        funIdx = (funIdx + 1) % FUN_MESSAGES.length;
-        els.funTip.textContent = FUN_MESSAGES[funIdx];
-    }, 3500);
-}
-function stopFunMessages() { clearInterval(funTimer); }
-
-/* ======================== DONE ======================== */
-function showDone() {
-    els.statBefore.textContent = formatBytes(state.originalSize);
-    els.statAfter.textContent = formatBytes(state.outputSize);
-    var saved = Math.max(0, Math.round((1 - state.outputSize / state.originalSize) * 100));
-    els.statSaved.textContent = saved > 0 ? ('-' + saved + '%') : '✨ optimized';
-
-    if (state.outputUrl) {
-        els.donePreview.src = state.outputUrl;
-        els.donePlayBtn.classList.remove('hide');
-        els.donePlayBtn.textContent = '▶';
-    }
-
-    state.tipsShown = false;
-    els.tipsSection.classList.add('hidden');
-    els.tipsList.innerHTML = '';
-
-    showScreen('done-screen');
-    setTimeout(function() { fireConfetti(); }, 300);
-}
-
-/* ======================== DOWNLOAD & SHARE ======================== */
-function downloadVideo() {
-    if (!state.outputUrl) return;
-    haptic('medium');
-    var a = document.createElement('a');
-    a.href = state.outputUrl;
-    a.download = 'crispy-status.mp4';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    markUsed();
-    showToast('Video saved! Post it to Status 🔥', 'success');
-    if (!state.tipsShown) {
-        state.tipsShown = true;
-        setTimeout(function() { showTips(); }, 600);
-    }
-}
-
-function shareToWhatsApp() {
-    if (!state.outputBlob) return;
-    haptic('medium');
-    if (navigator.canShare) {
-        var file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
-        var data = { files: [file] };
-        if (navigator.canShare(data)) {
-            navigator.share(data).then(function() {
-                markUsed();
-                showToast('Shared! 🚀', 'success');
-            }).catch(function() {});
-            return;
-        }
-    }
-    downloadVideo();
-}
-
-/* ======================== TIPS ======================== */
-function showTips() {
-    els.tipsSection.classList.remove('hidden');
-    els.tipsList.innerHTML = '';
-    QUALITY_TIPS.forEach(function(tip) {
-        var card = document.createElement('div');
-        card.className = 'tip-card';
-        card.innerHTML =
-            '<span class="tip-icon">' + tip.icon + '</span>' +
-            '<div class="tip-content">' +
-            '<strong>' + tip.title + '</strong>' +
-            '<p>' + tip.text + '</p>' +
-            '</div>';
-        els.tipsList.appendChild(card);
-    });
-    setTimeout(function() {
-        els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 350);
-}
-
-/* ======================== PWA INSTALL ======================== */
-function setupInstallPrompt() {
-    window.addEventListener('beforeinstallprompt', function(e) {
-        e.preventDefault();
-        state.installPrompt = e;
-        if (!localStorage.getItem('crispy_install_dismissed')) {
-            setTimeout(function() { els.installPrompt.classList.remove('hidden'); }, 5000);
-        }
-    });
-    els.installYes.addEventListener('click', async function() {
-        if (!state.installPrompt) return;
-        await state.installPrompt.prompt();
-        state.installPrompt = null;
-        els.installPrompt.classList.add('hidden');
-        showToast('Installed! 📲', 'success');
-    });
-    els.installDismiss.addEventListener('click', function() {
-        els.installPrompt.classList.add('hidden');
-        localStorage.setItem('crispy_install_dismissed', 'true');
-    });
-}
-
-/* ======================== UTILITIES ======================== */
-function formatBytes(b) {
-    if (b < 1024) return b + ' B';
-    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
-    return (b / (1024 * 1024)).toFixed(1) + ' MB';
-}
-function formatTime(s) {
-    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
-}
-function truncateFilename(n, max) {
-    if (n.length <= max) return n;
-    var ext = n.split('.').pop();
-    return n.substring(0, max - ext.length - 3) + '….' + ext;
-}
-function cleanup() {
-    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-    if (state.outputUrl) URL.revokeObjectURL(state.outputUrl);
-    state.objectUrl = null;
-    state.outputUrl = null;
-    state.outputBlob = null;
-    state.file = null;
-    state.tipsShown = false;
-    els.fileInput.value = '';
-    els.donePreview.src = '';
-    els.trimVideo.src = '';
-}
-
-/* ======================== BACK BUTTON ======================== */
-function setupBackButton() {
-    window.addEventListener('popstate', function() {
-        if (state.processing) {
-            history.pushState({ screen: 'processing-screen' }, '', '');
-            showToast('Processing in progress… Cancel first.', 'info');
-            return;
-        }
-        var current = document.querySelector('.screen.active');
-        if (current) {
-            switch (current.id) {
-                case 'trim-screen':
-                    els.trimVideo.pause();
-                    showScreen('home-screen');
-                    break;
-                case 'done-screen':
-                    cleanup();
-                    showScreen('home-screen');
-                    break;
-                default:
-                    showScreen('home-screen');
-            }
-        }
-    });
-}
-
-/* ======================== BEFOREUNLOAD ======================== */
-function setupBeforeUnload() {
-    window.addEventListener('beforeunload', function(e) {
-        if (state.processing) { e.preventDefault(); e.returnValue = ''; }
-    });
-}
-
-/* ======================== EVENT LISTENERS ======================== */
-function bindEvents() {
-
-    /* Home */
-    els.uploadBtn.addEventListener('click', function() {
-        if (!canUseToday()) { showPremium(); return; }
-        haptic('light');
-        els.fileInput.click();
-    });
-    els.fileInput.addEventListener('change', function(e) {
-        var f = e.target.files && e.target.files[0];
-        if (f) handleFileSelect(f);
-    });
-
-    /* Trim */
-    els.trimBackBtn.addEventListener('click', function() {
-        haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
-    });
-
-    var seekDebounce;
-    els.trimSlider.addEventListener('input', function() {
-        updateTrimUI();
-        clearTimeout(seekDebounce);
-        seekDebounce = setTimeout(function() {
-            els.trimVideo.currentTime = state.trimStart;
-        }, 60);
-    });
-
-    els.playPreviewBtn.addEventListener('click', function() {
-        haptic('light');
-        var v = els.trimVideo;
-        if (v.paused) {
-            v.currentTime = state.trimStart;
-            v.muted = false;
-            v.play();
-            els.playPreviewBtn.textContent = '⏸';
-            els.playPreviewBtn.classList.add('hide');
-            var stopAt = state.trimStart + CONFIG.maxDuration;
-            var stop = function() {
-                if (v.currentTime >= stopAt) {
-                    v.pause();
-                    v.removeEventListener('timeupdate', stop);
-                    els.playPreviewBtn.textContent = '▶';
-                    els.playPreviewBtn.classList.remove('hide');
-                }
-            };
-            v.addEventListener('timeupdate', stop);
-        } else {
-            v.pause();
-            els.playPreviewBtn.textContent = '▶';
-            els.playPreviewBtn.classList.remove('hide');
-        }
-    });
-
-    els.trimVideo.addEventListener('click', function() { els.playPreviewBtn.click(); });
-
-    els.trimContinueBtn.addEventListener('click', function() {
-        haptic('medium'); els.trimVideo.pause(); startProcessing();
-    });
-
-    /* Processing */
-    els.cancelBtn.addEventListener('click', function() { haptic('light'); cancelProcessing(); });
-
-    /* Done */
-    els.donePlayBtn.addEventListener('click', function() {
-        haptic('light');
-        var v = els.donePreview;
-        if (v.paused) { v.play(); els.donePlayBtn.classList.add('hide'); }
-        else { v.pause(); els.donePlayBtn.classList.remove('hide'); }
-    });
-    els.donePreview.addEventListener('click', function() { els.donePlayBtn.click(); });
-    els.donePreview.addEventListener('ended', function() {
-        els.donePlayBtn.classList.remove('hide');
-        els.donePlayBtn.textContent = '▶';
-    });
-
-    els.downloadBtn.addEventListener('click', downloadVideo);
-    els.shareBtn.addEventListener('click', shareToWhatsApp);
-
-    els.newVideoBtn.addEventListener('click', function() {
-        haptic('light');
-        if (!canUseToday()) { showPremium(); return; }
-        cleanup();
-        showScreen('home-screen');
-    });
-
-    /* Modals */
-    els.premiumCloseBtn.addEventListener('click', function() { haptic('light'); hidePremium(); });
-    els.upgradeBtn.addEventListener('click', function() { haptic('medium'); showToast('Premium coming soon! 🚀', 'info'); });
-    els.errorCloseBtn.addEventListener('click', function() { haptic('light'); hideError(); showScreen('home-screen'); });
-    els.premiumModal.addEventListener('click', function(e) { if (e.target === els.premiumModal) hidePremium(); });
-    els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            if (!els.premiumModal.classList.contains('hidden')) hidePremium();
-            if (!els.errorModal.classList.contains('hidden')) hideError();
-        }
-    });
-
-    window.addEventListener('resize', function() {
-        els.confettiCanvas.width = window.innerWidth;
-        els.confettiCanvas.height = window.innerHeight;
-    });
-}
-
-/* ======================== SERVICE WORKER ======================== */
-function registerSW() {
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(function() {});
-    }
-}
-
-/* ======================== PRELOAD ======================== */
-function preloadFFmpeg() {
-    setTimeout(function() {
-        if (!state.ffmpegReady) {
-            log('Preloading FFmpeg in background…');
-            loadFFmpeg().then(function() {
-                log('Background preload complete ✅');
-            }).catch(function(err) {
-                log('Background preload failed (will retry): ' + (err.message || err));
-            });
-        }
-    }, 4000);
-}
-
-/* ======================== INIT ======================== */
-function init() {
-    log('Crispy Status initializing…');
-
-    if (typeof WebAssembly === 'undefined') {
-        showError('Browser Not Supported',
-            'Your browser does not support WebAssembly. Use Chrome, Firefox, Safari, or Edge.');
-        return;
-    }
-    log('WebAssembly: ✅');
-
-    if (typeof SharedArrayBuffer === 'undefined') {
-        log('SharedArrayBuffer: not available (single-threaded mode — this is fine)');
-    } else {
-        log('SharedArrayBuffer: ✅');
-    }
-
-    bindEvents();
-    registerSW();
-    setupInstallPrompt();
-    setupBackButton();
-    setupBeforeUnload();
-    showScreen('home-screen');
-    preloadFFmpeg();
-
-    els.confettiCanvas.width = window.innerWidth;
-    els.confettiCanvas.height = window.innerHeight;
-
-    log('Init complete ✅');
-}
-
-init();
+        if (exitCode !== 0) throw new Error('FFMPEG_ERROR');
+        if (state.cancelled) 
