@@ -3,24 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crispy Status — Sharp Status. Every Time.</title>
+    <title>Crispy Status — Sharp WhatsApp Status. Every Time.</title>
 
     <!-- PWA -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0B0B1A">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos!">
+    <meta name="apple-mobile-web-app-title" content="Crispy Status">
+    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos.">
+
+    <!-- Social / Open Graph -->
+    <meta property="og:title" content="Crispy Status — Sharp Status. Every Time.">
+    <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video so it stays HD.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/og-image.png">
+    <meta name="twitter:card" content="summary_large_image">
 
     <!-- Font: Nunito — big, roundy, fun -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
 
-    <!-- Styles (separate file) -->
+    <!-- Styles -->
     <link rel="stylesheet" href="styles.css">
+
+    <!-- AdSense — Replace ca-pub-XXXXXXX with your publisher ID -->
+    <!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXX" crossorigin="anonymous"></script> -->
 </head>
 <body>
+
+<!-- Background decoration -->
+<div class="bg-orbs" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+</div>
+
+<!-- Confetti canvas -->
+<canvas id="confetti-canvas" aria-hidden="true"></canvas>
+
+<!-- Toast container -->
+<div id="toast-container" aria-live="polite"></div>
+
+<!-- PWA install prompt -->
+<div id="install-prompt" class="install-prompt hidden" role="banner">
+    <div class="install-inner">
+        <span class="install-icon" aria-hidden="true">📲</span>
+        <div class="install-text">
+            <strong>Install Crispy Status</strong>
+            <span>Add to home screen for quick access</span>
+        </div>
+        <button id="install-yes" class="btn btn-sm btn-primary">Install</button>
+        <button id="install-dismiss" class="btn-icon-only btn-dismiss" aria-label="Dismiss">✕</button>
+    </div>
+</div>
+
 <div id="app">
 
     <!-- ======================== HOME SCREEN ======================== -->
@@ -34,8 +72,9 @@
             </div>
 
             <button id="upload-btn" class="btn btn-primary btn-large pulse-glow" aria-label="Select a video to optimize">
-                <span class="btn-icon" aria-hidden="true">🎬</span>
-                <span class="btn-text">Make Your Video Crispy</span>
+                <span class="btn-emoji" aria-hidden="true">🎬</span>
+                <span class="btn-label">Make Your Video Crispy</span>
+                <span class="btn-spinner hidden" aria-hidden="true"></span>
             </button>
             <input type="file" id="file-input" accept="video/*" hidden>
 
@@ -49,7 +88,17 @@
             </div>
 
         </div>
+        <!-- AdSense banner — home screen -->
         <div class="ad-banner" id="ad-home">
+            <!-- Replace with your AdSense ad unit:
+            <ins class="adsbygoogle"
+                 style="display:block"
+                 data-ad-client="ca-pub-XXXXXXX"
+                 data-ad-slot="YYYYYYY"
+                 data-ad-format="auto"
+                 data-full-width-responsive="true"></ins>
+            <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+            -->
             <span class="ad-placeholder">Ad Space</span>
         </div>
     </section>
@@ -64,28 +113,33 @@
             </div>
 
             <div class="video-preview-wrap">
-                <video id="trim-video" playsinline muted></video>
+                <video id="trim-video" playsinline webkit-playsinline muted></video>
                 <button id="play-preview-btn" class="btn-play" aria-label="Play preview">▶</button>
             </div>
 
             <div class="trim-controls">
+                <div class="trim-info">
+                    <span class="trim-file-name" id="trim-file-name"></span>
+                    <span class="trim-file-dur" id="trim-file-dur"></span>
+                </div>
                 <div class="trim-track-wrap">
-                    <div class="trim-track">
+                    <div class="trim-track" id="trim-track">
                         <div id="trim-window" class="trim-window"></div>
                     </div>
                     <input type="range" id="trim-slider" min="0" max="100" value="0" step="0.1"
-                           aria-label="Select start position">
+                           aria-label="Select start position for 30-second clip">
                 </div>
                 <div class="trim-times">
                     <span id="trim-start-time">0:00</span>
-                    <span class="trim-duration-label">30 sec selected</span>
+                    <span class="trim-duration-label" id="trim-dur-label">30s selected</span>
                     <span id="trim-end-time">0:30</span>
                 </div>
             </div>
 
             <button id="trim-continue-btn" class="btn btn-primary btn-large">
-                <span class="btn-icon" aria-hidden="true">✨</span>
-                <span class="btn-text">Make It Crispy</span>
+                <span class="btn-emoji" aria-hidden="true">✨</span>
+                <span class="btn-label">Make It Crispy</span>
+                <span class="btn-spinner hidden" aria-hidden="true"></span>
             </button>
 
         </div>
@@ -96,7 +150,9 @@
         <div class="screen-content centered">
 
             <div class="processing-vis">
-                <div class="processing-emoji" aria-hidden="true">🍳</div>
+                <div class="processing-ring" aria-hidden="true">
+                    <div class="processing-emoji">🍳</div>
+                </div>
                 <h2 class="processing-title">Making it crispy…</h2>
                 <p class="processing-sub" id="processing-status">Loading video engine…</p>
             </div>
@@ -110,6 +166,8 @@
 
             <p class="processing-fun-tip" id="fun-tip">💡 Crispy videos get more views!</p>
 
+            <button id="cancel-btn" class="btn btn-ghost">Cancel</button>
+
         </div>
     </section>
 
@@ -120,6 +178,12 @@
             <div class="done-header">
                 <div class="done-emoji" aria-hidden="true">✅</div>
                 <h2>Video is Crispy!</h2>
+            </div>
+
+            <!-- Video preview -->
+            <div class="done-preview-wrap">
+                <video id="done-preview" playsinline webkit-playsinline muted loop></video>
+                <button id="done-play-btn" class="btn-play" aria-label="Play preview">▶</button>
             </div>
 
             <div class="stats-card">
@@ -137,24 +201,26 @@
 
             <div class="action-btns">
                 <button id="download-btn" class="btn btn-primary btn-large">
-                    <span class="btn-icon" aria-hidden="true">⬇️</span>
-                    <span class="btn-text">Download Video</span>
+                    <span class="btn-emoji" aria-hidden="true">⬇️</span>
+                    <span class="btn-label">Download Video</span>
+                    <span class="btn-spinner hidden" aria-hidden="true"></span>
                 </button>
                 <button id="share-btn" class="btn btn-secondary">
-                    <span class="btn-icon" aria-hidden="true">📤</span>
-                    <span class="btn-text">Share to WhatsApp</span>
+                    <span class="btn-emoji" aria-hidden="true">📤</span>
+                    <span class="btn-label">Share to WhatsApp</span>
                 </button>
             </div>
 
-            <!-- Tips appear here after download is pressed -->
+            <!-- Tips bounce in after download -->
             <div id="tips-section" class="tips-section hidden">
-                <p class="section-label">💡 Keep it sharp:</p>
+                <p class="section-label">💡 Keep it sharp</p>
                 <div id="tips-list" class="tips-list"></div>
             </div>
 
             <button id="new-video-btn" class="btn btn-ghost">🎬 Crispy another video</button>
 
         </div>
+        <!-- AdSense banner — done screen -->
         <div class="ad-banner" id="ad-done">
             <span class="ad-placeholder">Ad Space</span>
         </div>
@@ -163,19 +229,17 @@
     <!-- ======================== PREMIUM MODAL ======================== -->
     <div id="premium-modal" class="modal-overlay hidden" role="dialog" aria-modal="true"
          aria-labelledby="premium-heading">
-        <div class="modal-card">
+        <div class="modal-card premium-card">
             <div class="premium-badge" aria-hidden="true">🔥 PRO</div>
             <h2 id="premium-heading">Go Unlimited</h2>
             <p class="premium-sub">You've used your free video for today!</p>
-
             <ul class="premium-perks">
-                <li><span>✅</span> Unlimited videos</li>
+                <li><span>✅</span> Unlimited videos daily</li>
                 <li><span>⚡</span> Faster processing</li>
-                <li><span>🚫</span> No ads</li>
+                <li><span>🚫</span> No ads ever</li>
                 <li><span>📦</span> Batch processing</li>
                 <li><span>🎬</span> 1080p output</li>
             </ul>
-
             <button id="upgrade-btn" class="btn btn-premium">Upgrade — $2.99/mo</button>
             <button id="premium-close-btn" class="btn btn-ghost">Maybe later</button>
         </div>
@@ -194,11 +258,11 @@
 
 </div>
 
-<!-- FFmpeg WASM (loaded from CDN, runs on device) -->
+<!-- FFmpeg WASM -->
 <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
 <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
 
-<!-- App logic (separate file) -->
+<!-- App logic -->
 <script src="app.js"></script>
 </body>
 </html>
