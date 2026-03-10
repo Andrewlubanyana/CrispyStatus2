@@ -1,5 +1,8 @@
 /* ==========================================================
-   CRISPY STATUS — App Logic (Fixed & Robust)
+   CRISPY STATUS — App Logic (Fully Fixed)
+   
+   KEY FIX: Removed dependency on @ffmpeg/util entirely.
+   The toBlobURL helper is now written inline (5 lines).
    All video processing happens on the user's device.
    ========================================================== */
 
@@ -12,7 +15,6 @@ const CONFIG = {
     videoBitrate  : '4M',
     audioBitrate  : '128k',
     fps           : 30,
-    // Primary and fallback CDN for FFmpeg core
     cdnUrls: [
         'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd',
         'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd',
@@ -66,13 +68,9 @@ const state = {
 /* ======================== LOGGING ======================== */
 function log(msg, data) {
     const ts = new Date().toISOString().substr(11, 12);
-    if (data !== undefined) {
-        console.log(`[Crispy ${ts}] ${msg}`, data);
-    } else {
-        console.log(`[Crispy ${ts}] ${msg}`);
-    }
+    if (data !== undefined) console.log(`[Crispy ${ts}] ${msg}`, data);
+    else console.log(`[Crispy ${ts}] ${msg}`);
 }
-
 function logError(msg, err) {
     console.error(`[Crispy ERROR] ${msg}`, err);
 }
@@ -125,6 +123,22 @@ const els = {
     confettiCanvas   : $('confetti-canvas'),
 };
 
+/* ======================== HELPER: toBlobURL ========================
+   This replaces the entire @ffmpeg/util dependency.
+   It fetches a file from a URL and converts it to a local blob URL
+   so FFmpeg can load it without CORS issues.
+   ================================================================ */
+async function toBlobURL(url, mimeType) {
+    log('Fetching: ' + url);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    const blob = new Blob([buffer], { type: mimeType });
+    const blobUrl = URL.createObjectURL(blob);
+    log('Blob URL created for: ' + url.split('/').pop());
+    return blobUrl;
+}
+
 /* ======================== SCREEN NAV ======================== */
 function showScreen(id) {
     log('Navigating to: ' + id);
@@ -161,75 +175,82 @@ function fireConfetti() {
     const particles = [];
     for (let i = 0; i < 90; i++) {
         particles.push({
-            x: canvas.width/2 + (Math.random()-.5)*100,
+            x: canvas.width / 2 + (Math.random() - 0.5) * 100,
             y: canvas.height * 0.35,
-            vx: (Math.random()-.5)*18,
-            vy: Math.random()*-20-8,
-            size: Math.random()*8+4,
-            color: colors[Math.floor(Math.random()*colors.length)],
-            rotation: Math.random()*360,
-            rotSpeed: (Math.random()-.5)*12,
-            gravity: .4+Math.random()*.2,
+            vx: (Math.random() - 0.5) * 18,
+            vy: Math.random() * -20 - 8,
+            size: Math.random() * 8 + 4,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            rotation: Math.random() * 360,
+            rotSpeed: (Math.random() - 0.5) * 12,
+            gravity: 0.4 + Math.random() * 0.2,
             opacity: 1,
-            shape: Math.random()>.5?'circle':'rect',
+            shape: Math.random() > 0.5 ? 'circle' : 'rect',
         });
     }
     let frame = 0;
     const maxFrames = 150;
     function draw() {
-        ctx.clearRect(0,0,canvas.width,canvas.height);
-        particles.forEach(p => {
-            p.x+=p.vx; p.y+=p.vy; p.vy+=p.gravity; p.vx*=.99;
-            p.rotation+=p.rotSpeed;
-            p.opacity=Math.max(0,1-frame/maxFrames);
-            ctx.save(); ctx.globalAlpha=p.opacity;
-            ctx.translate(p.x,p.y);
-            ctx.rotate(p.rotation*Math.PI/180);
-            ctx.fillStyle=p.color;
-            if(p.shape==='circle'){ctx.beginPath();ctx.arc(0,0,p.size/2,0,Math.PI*2);ctx.fill()}
-            else{ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size)}
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        particles.forEach((p) => {
+            p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.99;
+            p.rotation += p.rotSpeed;
+            p.opacity = Math.max(0, 1 - frame / maxFrames);
+            ctx.save();
+            ctx.globalAlpha = p.opacity;
+            ctx.translate(p.x, p.y);
+            ctx.rotate((p.rotation * Math.PI) / 180);
+            ctx.fillStyle = p.color;
+            if (p.shape === 'circle') {
+                ctx.beginPath();
+                ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+            }
             ctx.restore();
         });
         frame++;
-        if(frame<maxFrames) requestAnimationFrame(draw);
-        else ctx.clearRect(0,0,canvas.width,canvas.height);
+        if (frame < maxFrames) requestAnimationFrame(draw);
+        else ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
     requestAnimationFrame(draw);
 }
 
 /* ======================== HAPTIC ======================== */
-function haptic(style='light') {
-    if(!navigator.vibrate) return;
-    const p = {light:[12],medium:[25],heavy:[50],success:[15,50,15]};
-    navigator.vibrate(p[style]||p.light);
+function haptic(style = 'light') {
+    if (!navigator.vibrate) return;
+    const p = { light: [12], medium: [25], heavy: [50], success: [15, 50, 15] };
+    navigator.vibrate(p[style] || p.light);
 }
 
 /* ======================== DAILY LIMIT ======================== */
 function canUseToday() {
     const today = new Date().toDateString();
     const saved = localStorage.getItem('crispy_date');
-    const count = parseInt(localStorage.getItem('crispy_count')||'0',10);
-    if(saved !== today) return true;
+    const count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
+    if (saved !== today) return true;
     return count < CONFIG.dailyFreeUses;
 }
-
 function markUsed() {
     const today = new Date().toDateString();
     const saved = localStorage.getItem('crispy_date');
     let count = 0;
-    if(saved===today) count = parseInt(localStorage.getItem('crispy_count')||'0',10);
+    if (saved === today) count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
     localStorage.setItem('crispy_date', today);
-    localStorage.setItem('crispy_count', String(count+1));
+    localStorage.setItem('crispy_count', String(count + 1));
 }
 
 /* ======================== MODALS ======================== */
 function showPremium() {
     els.premiumModal.classList.remove('hidden');
     const card = els.premiumModal.querySelector('.modal-card');
-    card.style.animation='none'; void card.offsetWidth; card.style.animation='';
+    card.style.animation = 'none';
+    void card.offsetWidth;
+    card.style.animation = '';
     haptic('medium');
 }
-function hidePremium() { els.premiumModal.classList.add('hidden') }
+function hidePremium() { els.premiumModal.classList.add('hidden'); }
 
 function showError(title, msg) {
     $('error-heading').textContent = title;
@@ -237,22 +258,22 @@ function showError(title, msg) {
     els.errorModal.classList.remove('hidden');
     haptic('heavy');
 }
-function hideError() { els.errorModal.classList.add('hidden') }
+function hideError() { els.errorModal.classList.add('hidden'); }
 
 /* ======================== FILE HANDLING ======================== */
 function handleFileSelect(file) {
-    log('File selected:', { name:file.name, size:file.size, type:file.type });
+    log('File selected:', { name: file.name, size: file.size, type: file.type });
 
-    if(!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) {
-        showError('Not a video','Please select a video file to continue.');
+    if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) {
+        showError('Not a video', 'Please select a video file to continue.');
         return;
     }
-    if(file.size > CONFIG.maxFileSize*1024*1024) {
-        showError('File too large',`Please pick a video under ${CONFIG.maxFileSize} MB.`);
+    if (file.size > CONFIG.maxFileSize * 1024 * 1024) {
+        showError('File too large', `Please pick a video under ${CONFIG.maxFileSize} MB.`);
         return;
     }
-    if(file.size < 10000) {
-        showError('File too small','This file seems too small to be a video. Please try another.');
+    if (file.size < 10000) {
+        showError('File too small', 'This file seems too small to be a video. Please try another.');
         return;
     }
 
@@ -269,11 +290,11 @@ function handleFileSelect(file) {
         state.duration = els.trimVideo.duration;
         log('Video duration:', state.duration);
 
-        if(isNaN(state.duration) || state.duration < 0.5) {
-            showError('Invalid video','Could not read this video. Please try a different file.');
+        if (isNaN(state.duration) || state.duration < 0.5) {
+            showError('Invalid video', 'Could not read this video. Please try a different file.');
             return;
         }
-        if(state.duration > CONFIG.maxDuration) {
+        if (state.duration > CONFIG.maxDuration) {
             setupTrimmer();
             showScreen('trim-screen');
         } else {
@@ -284,7 +305,7 @@ function handleFileSelect(file) {
 
     els.trimVideo.onerror = () => {
         setButtonLoading(els.uploadBtn, false);
-        showError('Unsupported format','This video format is not supported. Try an MP4 or MOV file.');
+        showError('Unsupported format', 'This video format is not supported. Try an MP4 or MOV file.');
     };
 }
 
@@ -297,113 +318,110 @@ function setButtonLoading(btn, loading) {
 function setupTrimmer() {
     const maxStart = Math.max(0, state.duration - CONFIG.maxDuration);
     const clipDur = Math.min(CONFIG.maxDuration, state.duration);
-    els.trimSlider.min=0; els.trimSlider.max=maxStart;
-    els.trimSlider.value=0; els.trimSlider.step=0.1;
-    state.trimStart=0;
-    els.trimFileName.textContent = truncateFilename(state.file.name,25);
-    els.trimFileDur.textContent = formatTime(state.duration)+' total';
-    els.trimDurLabel.textContent = Math.round(clipDur)+'s selected';
+    els.trimSlider.min = 0;
+    els.trimSlider.max = maxStart;
+    els.trimSlider.value = 0;
+    els.trimSlider.step = 0.1;
+    state.trimStart = 0;
+    els.trimFileName.textContent = truncateFilename(state.file.name, 25);
+    els.trimFileDur.textContent = formatTime(state.duration) + ' total';
+    els.trimDurLabel.textContent = Math.round(clipDur) + 's selected';
     updateTrimUI();
     els.playPreviewBtn.classList.remove('hide');
-    els.playPreviewBtn.textContent='▶';
+    els.playPreviewBtn.textContent = '▶';
     els.trimVideo.pause();
-    els.trimVideo.currentTime=0;
+    els.trimVideo.currentTime = 0;
 }
 
 function updateTrimUI() {
     const start = parseFloat(els.trimSlider.value);
     const dur = state.duration;
-    const clipDur = Math.min(CONFIG.maxDuration,dur);
-    const windowPct = (clipDur/dur)*100;
-    const leftPct = (start/dur)*100;
-    els.trimWindow.style.width = windowPct+'%';
-    els.trimWindow.style.left = leftPct+'%';
+    const clipDur = Math.min(CONFIG.maxDuration, dur);
+    const windowPct = (clipDur / dur) * 100;
+    const leftPct = (start / dur) * 100;
+    els.trimWindow.style.width = windowPct + '%';
+    els.trimWindow.style.left = leftPct + '%';
     els.trimStartTime.textContent = formatTime(start);
-    els.trimEndTime.textContent = formatTime(start+clipDur);
+    els.trimEndTime.textContent = formatTime(start + clipDur);
     state.trimStart = start;
 }
 
 /* ======================== FFMPEG LOADING ======================== */
 async function loadFFmpeg() {
-    if(state.ffmpegReady) {
+    if (state.ffmpegReady) {
         log('FFmpeg already loaded, reusing');
         return;
     }
 
-    log('Starting FFmpeg load...');
+    log('=== Loading FFmpeg ===');
 
-    // Step 1: Verify the CDN scripts loaded
-    if(typeof FFmpegWASM === 'undefined') {
-        logError('FFmpegWASM global not found — CDN script did not load');
+    // Step 1: Verify FFmpegWASM global exists
+    if (typeof FFmpegWASM === 'undefined') {
+        logError('FFmpegWASM global not found');
         throw new Error('SCRIPT_NOT_LOADED');
     }
-    if(typeof FFmpegUtil === 'undefined') {
-        logError('FFmpegUtil global not found — CDN script did not load');
-        throw new Error('SCRIPT_NOT_LOADED');
-    }
+    log('FFmpegWASM global found ✅');
 
-    log('CDN scripts verified ✅');
-
-    // Step 2: Create FFmpeg instance
+    // Step 2: Create instance
     const { FFmpeg } = FFmpegWASM;
-    const { toBlobURL } = FFmpegUtil;
-
     state.ffmpeg = new FFmpeg();
     log('FFmpeg instance created');
 
     // Step 3: Attach logging
     state.ffmpeg.on('log', ({ message }) => {
-        console.log('[FFmpeg log]', message);
+        console.log('[FFmpeg]', message);
     });
 
-    state.ffmpeg.on('progress', ({ progress, time }) => {
+    state.ffmpeg.on('progress', ({ progress }) => {
         const pct = Math.min(Math.round(progress * 100), 100);
-        if(pct > 0) setProgress(pct);
+        if (pct > 0) setProgress(pct);
     });
 
-    // Step 4: Load core (try each CDN)
+    // Step 4: Load core — try each CDN with our own toBlobURL
     let loaded = false;
-    for(const base of CONFIG.cdnUrls) {
+
+    for (const base of CONFIG.cdnUrls) {
         try {
-            log(`Trying CDN: ${base}`);
+            log('Trying CDN: ' + base);
             updateStatus('Downloading Crispy engine… ⬇️');
 
             const coreURL = await toBlobURL(
-                `${base}/ffmpeg-core.js`,
+                base + '/ffmpeg-core.js',
                 'text/javascript'
             );
-            log('Core JS blob URL created');
 
             const wasmURL = await toBlobURL(
-                `${base}/ffmpeg-core.wasm`,
+                base + '/ffmpeg-core.wasm',
                 'application/wasm'
             );
-            log('Core WASM blob URL created');
 
             updateStatus('Starting engine… 🔧');
+            log('Loading FFmpeg with blob URLs…');
 
             await state.ffmpeg.load({ coreURL, wasmURL });
 
             loaded = true;
-            log(`FFmpeg loaded from ${base} ✅`);
+            log('FFmpeg loaded successfully from ' + base + ' ✅');
             break;
-        } catch(err) {
-            logError(`CDN failed: ${base}`, err);
+
+        } catch (err) {
+            logError('CDN failed: ' + base, err.message || err);
+            // Try next CDN
         }
     }
 
-    if(!loaded) {
-        logError('All CDNs failed');
+    if (!loaded) {
+        logError('All CDNs failed to load FFmpeg');
         throw new Error('ENGINE_LOAD_FAILED');
     }
 
     state.ffmpegReady = true;
-    log('FFmpeg ready ✅');
+    log('FFmpeg engine ready ✅');
 }
 
 /* ======================== PROCESSING ======================== */
 async function startProcessing() {
-    if(state.processing) return;
+    if (state.processing) return;
     state.processing = true;
     state.cancelled = false;
 
@@ -414,26 +432,28 @@ async function startProcessing() {
     try {
         // --------- STEP 1: Load engine ---------
         log('=== STEP 1: Load FFmpeg ===');
-        if(!state.ffmpegReady) {
+        if (!state.ffmpegReady) {
             updateStatus('Loading Crispy engine… 🔧');
             await loadFFmpeg();
+        } else {
+            log('FFmpeg was already loaded (preloaded or cached)');
         }
-        if(state.cancelled) throw new Error('CANCELLED');
+        if (state.cancelled) throw new Error('CANCELLED');
 
-        // --------- STEP 2: Read file into memory ---------
+        // --------- STEP 2: Read file into FFmpeg ---------
         log('=== STEP 2: Read file ===');
         updateStatus('Reading your video… 📖');
 
         const fileBuffer = await state.file.arrayBuffer();
-        log('File read into ArrayBuffer, size:', fileBuffer.byteLength);
+        log('File read into ArrayBuffer, bytes: ' + fileBuffer.byteLength);
 
-        const uint8 = new Uint8Array(fileBuffer);
+        const fileData = new Uint8Array(fileBuffer);
         log('Converted to Uint8Array');
 
-        await state.ffmpeg.writeFile('input', uint8);
-        log('File written to FFmpeg virtual filesystem ✅');
+        await state.ffmpeg.writeFile('input', fileData);
+        log('Written to FFmpeg virtual filesystem ✅');
 
-        if(state.cancelled) throw new Error('CANCELLED');
+        if (state.cancelled) throw new Error('CANCELLED');
 
         // --------- STEP 3: Run FFmpeg ---------
         log('=== STEP 3: Process video ===');
@@ -446,7 +466,7 @@ async function startProcessing() {
             '-ss', String(state.trimStart),
             '-i', 'input',
             '-t', String(clipDur),
-            '-vf', `scale=${CONFIG.outputWidth}:-2`,
+            '-vf', 'scale=' + CONFIG.outputWidth + ':-2',
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
             '-b:v', CONFIG.videoBitrate,
@@ -460,17 +480,17 @@ async function startProcessing() {
             'output.mp4',
         ];
 
-        log('FFmpeg command:', cmd.join(' '));
+        log('FFmpeg command: ' + cmd.join(' '));
 
         const exitCode = await state.ffmpeg.exec(cmd);
-        log('FFmpeg exit code:', exitCode);
+        log('FFmpeg exit code: ' + exitCode);
 
-        if(exitCode !== 0) {
-            logError('FFmpeg returned non-zero exit code', exitCode);
+        if (exitCode !== 0) {
+            logError('FFmpeg exited with error code ' + exitCode);
             throw new Error('FFMPEG_ERROR');
         }
 
-        if(state.cancelled) throw new Error('CANCELLED');
+        if (state.cancelled) throw new Error('CANCELLED');
 
         // --------- STEP 4: Read output ---------
         log('=== STEP 4: Read output ===');
@@ -479,72 +499,70 @@ async function startProcessing() {
         let outputData;
         try {
             outputData = await state.ffmpeg.readFile('output.mp4');
-            log('Output file read, size:', outputData.byteLength);
-        } catch(readErr) {
+            log('Output read, bytes: ' + outputData.byteLength);
+        } catch (readErr) {
             logError('Failed to read output file', readErr);
             throw new Error('OUTPUT_READ_FAILED');
         }
 
-        if(!outputData || outputData.byteLength < 1000) {
-            logError('Output file is too small or empty', outputData?.byteLength);
+        if (!outputData || outputData.byteLength < 1000) {
+            logError('Output too small: ' + (outputData?.byteLength || 0));
             throw new Error('OUTPUT_EMPTY');
         }
 
+        // Create downloadable blob
         state.outputBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
         state.outputUrl = URL.createObjectURL(state.outputBlob);
         state.outputSize = state.outputBlob.size;
+        log('Output blob created: ' + formatBytes(state.outputSize));
 
-        log('Output blob created:', formatBytes(state.outputSize));
-
-        // --------- STEP 5: Cleanup FFmpeg filesystem ---------
+        // --------- STEP 5: Cleanup FFmpeg temp files ---------
         try {
             await state.ffmpeg.deleteFile('input');
             await state.ffmpeg.deleteFile('output.mp4');
-            log('FFmpeg temp files cleaned up');
-        } catch(e) { /* ignore cleanup errors */ }
+            log('FFmpeg temp files cleaned');
+        } catch (e) { /* ignore */ }
 
         // --------- DONE ---------
         log('=== PROCESSING COMPLETE ✅ ===');
         haptic('success');
         showDone();
 
-    } catch(err) {
+    } catch (err) {
         stopFunMessages();
 
-        if(err.message === 'CANCELLED') {
-            log('Processing was cancelled by user');
-            showToast('Processing cancelled','info');
+        if (err.message === 'CANCELLED') {
+            log('Cancelled by user');
+            showToast('Processing cancelled', 'info');
             showScreen('home-screen');
             return;
         }
 
-        logError('Processing failed at step', err);
+        logError('Processing failed', err);
 
-        // Show specific error messages based on failure type
         let title = 'Processing Failed';
         let msg = '';
 
-        switch(err.message) {
+        switch (err.message) {
             case 'SCRIPT_NOT_LOADED':
                 title = 'Engine Not Loaded';
-                msg = 'The video engine could not be downloaded. Check your internet connection and refresh the page.';
+                msg = 'The video engine could not be loaded. Refresh the page and make sure you have internet.';
                 break;
             case 'ENGINE_LOAD_FAILED':
                 title = 'Engine Download Failed';
-                msg = 'Could not download the processing engine. Make sure you have a stable internet connection and try again.';
+                msg = 'Could not download the processing engine. Check your internet connection and try again.';
                 break;
             case 'FFMPEG_ERROR':
                 title = 'Video Format Issue';
-                msg = 'This video format could not be processed. Try converting it to MP4 first, or try a different video.';
+                msg = 'This video format could not be processed. Try an MP4 video, or try a different file.';
                 break;
             case 'OUTPUT_READ_FAILED':
             case 'OUTPUT_EMPTY':
                 title = 'Processing Error';
-                msg = 'The video was processed but the output was empty. Your video might be too complex. Try a shorter or smaller video.';
+                msg = 'The output was empty. Try a shorter or smaller video.';
                 break;
             default:
-                msg = 'Something unexpected went wrong. Try a different video, or refresh the page and try again.';
-                break;
+                msg = 'Something went wrong. Try a different video or refresh the page.';
         }
 
         showError(title, msg);
@@ -558,83 +576,82 @@ async function startProcessing() {
 
 function cancelProcessing() {
     state.cancelled = true;
-    showToast('Cancelling…','info',2000);
+    showToast('Cancelling…', 'info', 2000);
 }
 
 /* ======================== PROGRESS ======================== */
 function setProgress(pct) {
-    els.progressFill.style.width = pct+'%';
-    els.progressText.textContent = pct+' %';
+    els.progressFill.style.width = pct + '%';
+    els.progressText.textContent = pct + ' %';
 }
-
 function updateStatus(msg) {
-    els.processingStatus.style.opacity='0';
+    els.processingStatus.style.opacity = '0';
     setTimeout(() => {
-        els.processingStatus.textContent=msg;
-        els.processingStatus.style.opacity='1';
-    },150);
+        els.processingStatus.textContent = msg;
+        els.processingStatus.style.opacity = '1';
+    }, 150);
 }
 
-let funTimer=null, funIdx=0;
+let funTimer = null, funIdx = 0;
 function startFunMessages() {
-    funIdx=0;
-    funTimer=setInterval(()=>{
-        funIdx=(funIdx+1)%FUN_MESSAGES.length;
-        els.funTip.textContent=FUN_MESSAGES[funIdx];
-    },3500);
+    funIdx = 0;
+    funTimer = setInterval(() => {
+        funIdx = (funIdx + 1) % FUN_MESSAGES.length;
+        els.funTip.textContent = FUN_MESSAGES[funIdx];
+    }, 3500);
 }
-function stopFunMessages() { clearInterval(funTimer) }
+function stopFunMessages() { clearInterval(funTimer); }
 
-/* ======================== DONE SCREEN ======================== */
+/* ======================== DONE ======================== */
 function showDone() {
-    els.statBefore.textContent=formatBytes(state.originalSize);
-    els.statAfter.textContent=formatBytes(state.outputSize);
-    const saved=Math.max(0,Math.round((1-state.outputSize/state.originalSize)*100));
-    els.statSaved.textContent=saved>0?`-${saved}%`:'✨ optimized';
+    els.statBefore.textContent = formatBytes(state.originalSize);
+    els.statAfter.textContent = formatBytes(state.outputSize);
+    const saved = Math.max(0, Math.round((1 - state.outputSize / state.originalSize) * 100));
+    els.statSaved.textContent = saved > 0 ? '-' + saved + '%' : '✨ optimized';
 
-    if(state.outputUrl) {
-        els.donePreview.src=state.outputUrl;
+    if (state.outputUrl) {
+        els.donePreview.src = state.outputUrl;
         els.donePlayBtn.classList.remove('hide');
-        els.donePlayBtn.textContent='▶';
+        els.donePlayBtn.textContent = '▶';
     }
 
-    state.tipsShown=false;
+    state.tipsShown = false;
     els.tipsSection.classList.add('hidden');
-    els.tipsList.innerHTML='';
+    els.tipsList.innerHTML = '';
 
     showScreen('done-screen');
-    setTimeout(()=>fireConfetti(),300);
+    setTimeout(() => fireConfetti(), 300);
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
 function downloadVideo() {
-    if(!state.outputUrl) return;
+    if (!state.outputUrl) return;
     haptic('medium');
-    const a=document.createElement('a');
-    a.href=state.outputUrl;
-    a.download='crispy-status.mp4';
+    const a = document.createElement('a');
+    a.href = state.outputUrl;
+    a.download = 'crispy-status.mp4';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     markUsed();
-    showToast('Video saved! Post it to Status 🔥','success');
-    if(!state.tipsShown) {
-        state.tipsShown=true;
-        setTimeout(()=>showTips(),600);
+    showToast('Video saved! Post it to Status 🔥', 'success');
+    if (!state.tipsShown) {
+        state.tipsShown = true;
+        setTimeout(() => showTips(), 600);
     }
 }
 
 function shareToWhatsApp() {
-    if(!state.outputBlob) return;
+    if (!state.outputBlob) return;
     haptic('medium');
-    if(navigator.canShare) {
-        const file=new File([state.outputBlob],'crispy-status.mp4',{type:'video/mp4'});
-        const data={files:[file]};
-        if(navigator.canShare(data)) {
-            navigator.share(data).then(()=>{
+    if (navigator.canShare) {
+        const file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
+        const data = { files: [file] };
+        if (navigator.canShare(data)) {
+            navigator.share(data).then(() => {
                 markUsed();
-                showToast('Shared! 🚀','success');
-            }).catch(()=>{});
+                showToast('Shared! 🚀', 'success');
+            }).catch(() => {});
             return;
         }
     }
@@ -644,78 +661,83 @@ function shareToWhatsApp() {
 /* ======================== TIPS ======================== */
 function showTips() {
     els.tipsSection.classList.remove('hidden');
-    els.tipsList.innerHTML='';
-    QUALITY_TIPS.forEach(tip => {
-        const card=document.createElement('div');
-        card.className='tip-card';
-        card.innerHTML=`
-            <span class="tip-icon">${tip.icon}</span>
-            <div class="tip-content">
-                <strong>${tip.title}</strong>
-                <p>${tip.text}</p>
-            </div>`;
+    els.tipsList.innerHTML = '';
+    QUALITY_TIPS.forEach((tip) => {
+        const card = document.createElement('div');
+        card.className = 'tip-card';
+        card.innerHTML =
+            '<span class="tip-icon">' + tip.icon + '</span>' +
+            '<div class="tip-content">' +
+            '<strong>' + tip.title + '</strong>' +
+            '<p>' + tip.text + '</p>' +
+            '</div>';
         els.tipsList.appendChild(card);
     });
-    setTimeout(()=>{ els.tipsSection.scrollIntoView({behavior:'smooth',block:'start'}) },350);
+    setTimeout(() => {
+        els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 350);
 }
 
 /* ======================== PWA INSTALL ======================== */
 function setupInstallPrompt() {
-    window.addEventListener('beforeinstallprompt',(e)=>{
+    window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
-        state.installPrompt=e;
-        if(!localStorage.getItem('crispy_install_dismissed')) {
-            setTimeout(()=>{ els.installPrompt.classList.remove('hidden') },5000);
+        state.installPrompt = e;
+        if (!localStorage.getItem('crispy_install_dismissed')) {
+            setTimeout(() => { els.installPrompt.classList.remove('hidden'); }, 5000);
         }
     });
-    els.installYes.addEventListener('click',async()=>{
-        if(!state.installPrompt)return;
+    els.installYes.addEventListener('click', async () => {
+        if (!state.installPrompt) return;
         await state.installPrompt.prompt();
-        state.installPrompt=null;
+        state.installPrompt = null;
         els.installPrompt.classList.add('hidden');
-        showToast('Installed! 📲','success');
+        showToast('Installed! 📲', 'success');
     });
-    els.installDismiss.addEventListener('click',()=>{
+    els.installDismiss.addEventListener('click', () => {
         els.installPrompt.classList.add('hidden');
-        localStorage.setItem('crispy_install_dismissed','true');
+        localStorage.setItem('crispy_install_dismissed', 'true');
     });
 }
 
 /* ======================== UTILITIES ======================== */
 function formatBytes(b) {
-    if(b<1024) return b+' B';
-    if(b<1024*1024) return (b/1024).toFixed(1)+' KB';
-    return (b/(1024*1024)).toFixed(1)+' MB';
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(1) + ' MB';
 }
 function formatTime(s) {
-    const m=Math.floor(s/60);
-    const sec=Math.floor(s%60);
-    return m+':'+String(sec).padStart(2,'0');
+    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
 }
-function truncateFilename(n,max) {
-    if(n.length<=max) return n;
-    const ext=n.split('.').pop();
-    return n.substring(0,max-ext.length-3)+'….'+ext;
+function truncateFilename(n, max) {
+    if (n.length <= max) return n;
+    const ext = n.split('.').pop();
+    return n.substring(0, max - ext.length - 3) + '….' + ext;
 }
 function cleanup() {
-    if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-    if(state.outputUrl) URL.revokeObjectURL(state.outputUrl);
-    state.objectUrl=null; state.outputUrl=null;
-    state.outputBlob=null; state.file=null; state.tipsShown=false;
-    els.fileInput.value=''; els.donePreview.src=''; els.trimVideo.src='';
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    if (state.outputUrl) URL.revokeObjectURL(state.outputUrl);
+    state.objectUrl = null;
+    state.outputUrl = null;
+    state.outputBlob = null;
+    state.file = null;
+    state.tipsShown = false;
+    els.fileInput.value = '';
+    els.donePreview.src = '';
+    els.trimVideo.src = '';
 }
 
 /* ======================== BACK BUTTON ======================== */
 function setupBackButton() {
-    window.addEventListener('popstate',()=>{
-        if(state.processing) {
-            history.pushState({screen:'processing-screen'},'','');
-            showToast('Processing in progress… Cancel first.','info');
+    window.addEventListener('popstate', () => {
+        if (state.processing) {
+            history.pushState({ screen: 'processing-screen' }, '', '');
+            showToast('Processing in progress… Cancel first.', 'info');
             return;
         }
-        const current=document.querySelector('.screen.active');
-        if(current) {
-            switch(current.id) {
+        const current = document.querySelector('.screen.active');
+        if (current) {
+            switch (current.id) {
                 case 'trim-screen': els.trimVideo.pause(); showScreen('home-screen'); break;
                 case 'done-screen': cleanup(); showScreen('home-screen'); break;
                 default: showScreen('home-screen');
@@ -726,8 +748,8 @@ function setupBackButton() {
 
 /* ======================== BEFOREUNLOAD ======================== */
 function setupBeforeUnload() {
-    window.addEventListener('beforeunload',(e)=>{
-        if(state.processing) { e.preventDefault(); e.returnValue=''; }
+    window.addEventListener('beforeunload', (e) => {
+        if (state.processing) { e.preventDefault(); e.returnValue = ''; }
     });
 }
 
@@ -735,121 +757,122 @@ function setupBeforeUnload() {
 function bindEvents() {
 
     /* Home */
-    els.uploadBtn.addEventListener('click',()=>{
-        if(!canUseToday()){showPremium();return}
+    els.uploadBtn.addEventListener('click', () => {
+        if (!canUseToday()) { showPremium(); return; }
         haptic('light');
         els.fileInput.click();
     });
-    els.fileInput.addEventListener('change',(e)=>{
-        const f=e.target.files&&e.target.files[0];
-        if(f) handleFileSelect(f);
+    els.fileInput.addEventListener('change', (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) handleFileSelect(f);
     });
 
     /* Trim */
-    els.trimBackBtn.addEventListener('click',()=>{
+    els.trimBackBtn.addEventListener('click', () => {
         haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
     });
 
     let seekDebounce;
-    els.trimSlider.addEventListener('input',()=>{
+    els.trimSlider.addEventListener('input', () => {
         updateTrimUI();
         clearTimeout(seekDebounce);
-        seekDebounce=setTimeout(()=>{ els.trimVideo.currentTime=state.trimStart },60);
+        seekDebounce = setTimeout(() => { els.trimVideo.currentTime = state.trimStart; }, 60);
     });
 
-    els.playPreviewBtn.addEventListener('click',()=>{
+    els.playPreviewBtn.addEventListener('click', () => {
         haptic('light');
-        const v=els.trimVideo;
-        if(v.paused) {
-            v.currentTime=state.trimStart; v.muted=false; v.play();
-            els.playPreviewBtn.textContent='⏸';
+        const v = els.trimVideo;
+        if (v.paused) {
+            v.currentTime = state.trimStart;
+            v.muted = false;
+            v.play();
+            els.playPreviewBtn.textContent = '⏸';
             els.playPreviewBtn.classList.add('hide');
-            const stopAt=state.trimStart+CONFIG.maxDuration;
-            const stop=()=>{
-                if(v.currentTime>=stopAt){
-                    v.pause(); v.removeEventListener('timeupdate',stop);
-                    els.playPreviewBtn.textContent='▶';
+            const stopAt = state.trimStart + CONFIG.maxDuration;
+            const stop = () => {
+                if (v.currentTime >= stopAt) {
+                    v.pause();
+                    v.removeEventListener('timeupdate', stop);
+                    els.playPreviewBtn.textContent = '▶';
                     els.playPreviewBtn.classList.remove('hide');
                 }
             };
-            v.addEventListener('timeupdate',stop);
+            v.addEventListener('timeupdate', stop);
         } else {
             v.pause();
-            els.playPreviewBtn.textContent='▶';
+            els.playPreviewBtn.textContent = '▶';
             els.playPreviewBtn.classList.remove('hide');
         }
     });
 
-    els.trimVideo.addEventListener('click',()=>{ els.playPreviewBtn.click() });
+    els.trimVideo.addEventListener('click', () => { els.playPreviewBtn.click(); });
 
-    els.trimContinueBtn.addEventListener('click',()=>{
+    els.trimContinueBtn.addEventListener('click', () => {
         haptic('medium'); els.trimVideo.pause(); startProcessing();
     });
 
     /* Processing */
-    els.cancelBtn.addEventListener('click',()=>{ haptic('light'); cancelProcessing() });
+    els.cancelBtn.addEventListener('click', () => { haptic('light'); cancelProcessing(); });
 
     /* Done */
-    els.donePlayBtn.addEventListener('click',()=>{
+    els.donePlayBtn.addEventListener('click', () => {
         haptic('light');
-        const v=els.donePreview;
-        if(v.paused){v.play();els.donePlayBtn.classList.add('hide')}
-        else{v.pause();els.donePlayBtn.classList.remove('hide')}
+        const v = els.donePreview;
+        if (v.paused) { v.play(); els.donePlayBtn.classList.add('hide'); }
+        else { v.pause(); els.donePlayBtn.classList.remove('hide'); }
     });
-    els.donePreview.addEventListener('click',()=>{ els.donePlayBtn.click() });
-    els.donePreview.addEventListener('ended',()=>{
+    els.donePreview.addEventListener('click', () => { els.donePlayBtn.click(); });
+    els.donePreview.addEventListener('ended', () => {
         els.donePlayBtn.classList.remove('hide');
-        els.donePlayBtn.textContent='▶';
+        els.donePlayBtn.textContent = '▶';
     });
 
     els.downloadBtn.addEventListener('click', downloadVideo);
     els.shareBtn.addEventListener('click', shareToWhatsApp);
 
-    els.newVideoBtn.addEventListener('click',()=>{
+    els.newVideoBtn.addEventListener('click', () => {
         haptic('light');
-        if(!canUseToday()){showPremium();return}
+        if (!canUseToday()) { showPremium(); return; }
         cleanup();
         showScreen('home-screen');
     });
 
     /* Modals */
-    els.premiumCloseBtn.addEventListener('click',()=>{ haptic('light'); hidePremium() });
-    els.upgradeBtn.addEventListener('click',()=>{ haptic('medium'); showToast('Premium coming soon! 🚀','info') });
-    els.errorCloseBtn.addEventListener('click',()=>{ haptic('light'); hideError(); showScreen('home-screen') });
-    els.premiumModal.addEventListener('click',(e)=>{ if(e.target===els.premiumModal) hidePremium() });
-    els.errorModal.addEventListener('click',(e)=>{ if(e.target===els.errorModal) hideError() });
+    els.premiumCloseBtn.addEventListener('click', () => { haptic('light'); hidePremium(); });
+    els.upgradeBtn.addEventListener('click', () => { haptic('medium'); showToast('Premium coming soon! 🚀', 'info'); });
+    els.errorCloseBtn.addEventListener('click', () => { haptic('light'); hideError(); showScreen('home-screen'); });
+    els.premiumModal.addEventListener('click', (e) => { if (e.target === els.premiumModal) hidePremium(); });
+    els.errorModal.addEventListener('click', (e) => { if (e.target === els.errorModal) hideError(); });
 
-    document.addEventListener('keydown',(e)=>{
-        if(e.key==='Escape'){
-            if(!els.premiumModal.classList.contains('hidden')) hidePremium();
-            if(!els.errorModal.classList.contains('hidden')) hideError();
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (!els.premiumModal.classList.contains('hidden')) hidePremium();
+            if (!els.errorModal.classList.contains('hidden')) hideError();
         }
     });
 
-    window.addEventListener('resize',()=>{
-        els.confettiCanvas.width=window.innerWidth;
-        els.confettiCanvas.height=window.innerHeight;
+    window.addEventListener('resize', () => {
+        els.confettiCanvas.width = window.innerWidth;
+        els.confettiCanvas.height = window.innerHeight;
     });
 }
 
 /* ======================== SERVICE WORKER ======================== */
 function registerSW() {
-    if('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(()=>{});
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
     }
 }
 
 /* ======================== PRELOAD ======================== */
 function preloadFFmpeg() {
-    // Start loading FFmpeg in the background after 4 seconds
-    // This way the 2nd use is near-instant
-    setTimeout(()=>{
-        if(!state.ffmpegReady) {
+    setTimeout(() => {
+        if (!state.ffmpegReady) {
             log('Preloading FFmpeg in background…');
-            loadFFmpeg().then(()=>{
+            loadFFmpeg().then(() => {
                 log('Background preload complete ✅');
-            }).catch((err)=>{
-                log('Background preload failed (will retry on use):', err.message);
+            }).catch((err) => {
+                log('Background preload failed (will retry on use): ' + (err.message || err));
             });
         }
     }, 4000);
@@ -859,13 +882,19 @@ function preloadFFmpeg() {
 function init() {
     log('Crispy Status initializing…');
 
-    // Verify browser compatibility
-    if(typeof WebAssembly === 'undefined') {
+    if (typeof WebAssembly === 'undefined') {
         showError('Browser Not Supported',
             'Your browser does not support WebAssembly. Please use Chrome, Firefox, Safari, or Edge.');
         return;
     }
-    log('WebAssembly support: ✅');
+    log('WebAssembly: ✅');
+
+    if (typeof SharedArrayBuffer === 'undefined') {
+        log('⚠️ SharedArrayBuffer not available — FFmpeg will use single-threaded mode');
+        log('This is normal on most mobile browsers and will work fine');
+    } else {
+        log('SharedArrayBuffer: ✅');
+    }
 
     bindEvents();
     registerSW();
@@ -875,8 +904,8 @@ function init() {
     showScreen('home-screen');
     preloadFFmpeg();
 
-    els.confettiCanvas.width=window.innerWidth;
-    els.confettiCanvas.height=window.innerHeight;
+    els.confettiCanvas.width = window.innerWidth;
+    els.confettiCanvas.height = window.innerHeight;
 
     log('Init complete ✅');
 }
