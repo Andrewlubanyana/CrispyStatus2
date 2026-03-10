@@ -814,3 +814,26 @@ body {
     .logo-area    { padding-top: 14vh }
     .done-header  { padding-top: 4vh }
 }
+/* ---------------------- BACKGROUND NOTICE ---------------------- */
+.bg-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(34, 214, 127, .08);
+    border: 1px solid rgba(34, 214, 127, .2);
+    border-radius: var(--r-full);
+    padding: 10px 18px;
+    margin-top: 4px;
+    max-width: 340px;
+    animation: slideUp .5s var(--bounce) .5s both;
+}
+.bg-notice-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+.bg-notice-text {
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--green);
+    line-height: 1.3;
+}
