@@ -63,7 +63,7 @@
         <div class="screen-content">
 
             <div class="logo-area">
-                <div class="logo-icon" aria-hidden="true">🔥</div>
+                <div class="logo-icon" aria-hidden="true">��</div>
                 <h1 class="logo-text">Crispy Status</h1>
                 <p class="tagline">Sharp status. Every time.</p>
             </div>
@@ -243,18 +243,18 @@
 </div>
 
 <!-- 
-    FFmpeg WASM — Version-matched set (all 0.12.6)
-    These run entirely in the browser. No server needed.
+    FFmpeg WASM — Only the main package needed.
+    We write our own helper functions instead of @ffmpeg/util.
 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
 
-<!-- Diagnostic: verify scripts loaded -->
+<!-- Verify FFmpeg loaded -->
 <script>
-    if(typeof FFmpegWASM==='undefined') console.error('[Crispy] FFmpegWASM failed to load from CDN');
-    else console.log('[Crispy] ✅ FFmpegWASM loaded');
-    if(typeof FFmpegUtil==='undefined') console.error('[Crispy] FFmpegUtil failed to load from CDN');
-    else console.log('[Crispy] ✅ FFmpegUtil loaded');
+    if (typeof FFmpegWASM === 'undefined') {
+        console.error('[Crispy] FFmpegWASM FAILED to load from CDN');
+    } else {
+        console.log('[Crispy] ✅ FFmpegWASM loaded successfully');
+    }
 </script>
 
 <!-- App logic -->
