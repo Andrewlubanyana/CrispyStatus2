@@ -20,16 +20,13 @@
     <meta property="og:image" content="/og-image.png">
     <meta name="twitter:card" content="summary_large_image">
 
-    <!-- Font: Nunito — big, roundy, fun -->
+    <!-- Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
 
     <!-- Styles -->
     <link rel="stylesheet" href="styles.css">
-
-    <!-- AdSense — Replace ca-pub-XXXXXXX with your publisher ID -->
-    <!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXX" crossorigin="anonymous"></script> -->
 </head>
 <body>
 
@@ -88,17 +85,7 @@
             </div>
 
         </div>
-        <!-- AdSense banner — home screen -->
         <div class="ad-banner" id="ad-home">
-            <!-- Replace with your AdSense ad unit:
-            <ins class="adsbygoogle"
-                 style="display:block"
-                 data-ad-client="ca-pub-XXXXXXX"
-                 data-ad-slot="YYYYYYY"
-                 data-ad-format="auto"
-                 data-full-width-responsive="true"></ins>
-            <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
-            -->
             <span class="ad-placeholder">Ad Space</span>
         </div>
     </section>
@@ -180,7 +167,6 @@
                 <h2>Video is Crispy!</h2>
             </div>
 
-            <!-- Video preview -->
             <div class="done-preview-wrap">
                 <video id="done-preview" playsinline webkit-playsinline muted loop></video>
                 <button id="done-play-btn" class="btn-play" aria-label="Play preview">▶</button>
@@ -211,7 +197,6 @@
                 </button>
             </div>
 
-            <!-- Tips bounce in after download -->
             <div id="tips-section" class="tips-section hidden">
                 <p class="section-label">💡 Keep it sharp</p>
                 <div id="tips-list" class="tips-list"></div>
@@ -220,7 +205,6 @@
             <button id="new-video-btn" class="btn btn-ghost">🎬 Crispy another video</button>
 
         </div>
-        <!-- AdSense banner — done screen -->
         <div class="ad-banner" id="ad-done">
             <span class="ad-placeholder">Ad Space</span>
         </div>
@@ -258,9 +242,20 @@
 
 </div>
 
-<!-- FFmpeg WASM -->
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+<!-- 
+    FFmpeg WASM — Version-matched set (all 0.12.6)
+    These run entirely in the browser. No server needed.
+-->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+
+<!-- Diagnostic: verify scripts loaded -->
+<script>
+    if(typeof FFmpegWASM==='undefined') console.error('[Crispy] FFmpegWASM failed to load from CDN');
+    else console.log('[Crispy] ✅ FFmpegWASM loaded');
+    if(typeof FFmpegUtil==='undefined') console.error('[Crispy] FFmpegUtil failed to load from CDN');
+    else console.log('[Crispy] ✅ FFmpegUtil loaded');
+</script>
 
 <!-- App logic -->
 <script src="app.js"></script>
