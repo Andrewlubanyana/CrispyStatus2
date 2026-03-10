@@ -240,4 +240,28 @@
     var OriginalWorker = window.Worker;
     window.Worker = function PatchedWorker(scriptURL, options) {
         var url = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
-        if 
+        if (url.startsWith('http') && !url.startsWith(location.origin)) {
+            console.log('[Crispy Worker Patch] Wrapping:', url);
+            var blob = new Blob(
+                ['importScripts(' + JSON.stringify(url) + ');'],
+                { type: 'text/javascript' }
+            );
+            return new OriginalWorker(URL.createObjectURL(blob), options);
+        }
+        return new OriginalWorker(scriptURL, options);
+    };
+    window.Worker.prototype = OriginalWorker.prototype;
+    console.log('[Crispy] ✅ Worker CORS patch installed');
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+
+<script>
+    if (typeof FFmpegWASM === 'undefined') console.error('[Crispy] ❌ FFmpegWASM failed to load');
+    else console.log('[Crispy] ✅ FFmpegWASM loaded');
+</script>
+
+<script src="app.js"></script>
+</body>
+</html>
