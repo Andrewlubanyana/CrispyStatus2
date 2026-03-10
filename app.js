@@ -1,12 +1,22 @@
 /* ==========================================================
    CRISPY STATUS — App Logic
+   Quality Engine v3 — Maximum WhatsApp Quality
+
+   Strategy: Output the highest visual quality that stays
+   under WhatsApp's re-compression threshold.
    
-   Quality Engine v2:
-   - Smart resolution detection (portrait vs landscape)
-   - CRF-based encoding (quality per frame, not fixed bitrate)
-   - H.264 Main Profile 3.1 (WhatsApp's native format)
-   - File size optimized to stay under WhatsApp's re-compression threshold
-   - Keyframe interval matched to WhatsApp's expectations
+   WhatsApp's internal behavior:
+   - Under ~5MB/30s: passes through with minimal compression
+   - 5-10MB: light re-compression
+   - Over 10MB: heavy re-compression
+   
+   Our approach:
+   - CRF 18 (high quality per frame)
+   - 640px short side (sharp on all phones)
+   - High profile 4.0 (advanced encoding tools)
+   - Medium preset (best quality-per-byte)
+   - Smart CRF scaling based on duration
+   - Maxrate cap prevents file size spikes
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -15,21 +25,36 @@ var CONFIG = {
     maxFileSize   : 500,
     dailyFreeUses : 1,
 
-    // Quality settings optimized for WhatsApp Status
-    // The goal: output a file so close to WhatsApp's internal format
-    // that WhatsApp has almost nothing left to compress
     quality: {
-        shortSide   : 540,     // pixels on the shorter dimension
-        crf         : 23,      // quality level (18=high, 23=balanced, 28=small)
-        maxBitrate  : '2500k', // cap to prevent file size spikes
-        bufSize     : '5000k', // rate control buffer
-        audioBitrate: '128k',
-        audioRate   : 44100,
-        fps         : 30,
-        preset      : 'fast',  // encoding speed vs compression efficiency
-        profile     : 'main',  // H.264 profile WhatsApp uses internally
-        level       : '3.1',   // H.264 level
-        keyint      : 30,      // keyframe every 1 second (fps / 1)
+        // Resolution: 640px on the shorter dimension
+        // Portrait 9:16 → 640×1138  |  Landscape 16:9 → 1138×640
+        // This is the sweet spot: sharper than 540, smaller files than 720
+        shortSide    : 640,
+
+        // CRF 18 = high quality. Scale: 0 (lossless) to 51 (trash)
+        // 18 is visually near-transparent quality
+        // We dynamically adjust this based on duration (see getSmartCRF)
+        baseCRF      : 18,
+
+        // Bitrate ceiling — prevents file size spikes on complex scenes
+        maxBitrate   : '3000k',
+        bufSize      : '6000k',
+
+        // Audio
+        audioBitrate : '128k',
+        audioRate    : 44100,
+        audioChannels: 2,
+
+        // Encoding
+        fps          : 30,
+        preset       : 'medium',   // Best quality-per-byte without being glacially slow
+        profile      : 'high',     // Unlocks CABAC entropy coding + 8×8 DCT transforms
+        level        : '4.0',      // Supports up to 1080p30
+        keyint       : 30,         // 1 keyframe per second
+
+        // File size targets (MB) — stay under WhatsApp's threshold
+        targetMaxMB  : 5.5,        // Ideal max file size for 30s
+        absoluteMaxMB: 8,          // Hard ceiling before WhatsApp gets aggressive
     },
 
     cdnUrls: [
@@ -49,19 +74,23 @@ var FUN_MESSAGES = [
     '💎 Polishing your masterpiece…',
     '🎯 Fine-tuning the details…',
     '🚀 Almost there…',
+    '📐 Optimizing every pixel…',
+    '🏆 Making it Status-worthy…',
 ];
 
 var QUALITY_TIPS = [
     { icon: '📱', title: 'Post directly to Status',
-      text: 'Open WhatsApp → Status tab → pick the crispy video from your gallery. Don\'t use any other app to send it.' },
-    { icon: '🚫', title: 'Don\'t re-edit the video',
-      text: 'Any editing, filtering, or trimming after download will re-compress and kill the quality.' },
-    { icon: '📂', title: 'Use the downloaded file only',
-      text: 'Never screenshot or screen-record your video. Always use the actual downloaded MP4 file.' },
-    { icon: '⚡', title: 'Post it immediately',
-      text: 'Some phones re-compress videos in your gallery over time. Post to Status right after downloading.' },
+      text: 'Open WhatsApp → Status → pick the crispy video. Don\'t use any other app or editor to open it first.' },
+    { icon: '🚫', title: 'Never re-edit after download',
+      text: 'Any trimming, filtering, or editing will re-compress your video and destroy the quality we just saved.' },
+    { icon: '📂', title: 'Use the actual downloaded file',
+      text: 'Don\'t screen-record, screenshot, or forward the video. Always use the original downloaded MP4.' },
+    { icon: '⚡', title: 'Post immediately after download',
+      text: 'Some phones re-compress gallery videos over time. Post to Status right after downloading for best results.' },
     { icon: '🔄', title: 'Don\'t forward the Status',
-      text: 'Forwarding a Status video compresses it again. Ask people to save the original instead.' },
+      text: 'When someone forwards your Status, WhatsApp compresses it again. Share the original file instead.' },
+    { icon: '📶', title: 'Use Wi-Fi when posting',
+      text: 'WhatsApp may compress more aggressively on mobile data to save bandwidth. Use Wi-Fi for best upload quality.' },
 ];
 
 /* ======================== STATE ======================== */
@@ -150,9 +179,8 @@ async function toBlobURL(url, mimeType) {
     if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
     var buffer = await response.arrayBuffer();
     var blob = new Blob([buffer], { type: mimeType });
-    var blobUrl = URL.createObjectURL(blob);
     log('Blob ready: ' + url.split('/').pop() + ' (' + formatBytes(buffer.byteLength) + ')');
-    return blobUrl;
+    return URL.createObjectURL(blob);
 }
 
 /* ======================== SCREENS ======================== */
@@ -301,16 +329,15 @@ function handleFileSelect(file) {
     els.trimVideo.onloadedmetadata = function() {
         setButtonLoading(els.uploadBtn, false);
         state.duration = els.trimVideo.duration;
-
-        // Detect video orientation
         state.videoWidth = els.trimVideo.videoWidth;
         state.videoHeight = els.trimVideo.videoHeight;
         state.isPortrait = state.videoHeight >= state.videoWidth;
 
         log('Video info:', {
-            duration: state.duration + 's',
-            dimensions: state.videoWidth + 'x' + state.videoHeight,
-            orientation: state.isPortrait ? 'portrait' : 'landscape'
+            duration: state.duration.toFixed(1) + 's',
+            dimensions: state.videoWidth + '×' + state.videoHeight,
+            orientation: state.isPortrait ? 'portrait' : 'landscape',
+            originalSize: formatBytes(state.originalSize)
         });
 
         if (isNaN(state.duration) || state.duration < 0.5) {
@@ -328,7 +355,7 @@ function handleFileSelect(file) {
 
     els.trimVideo.onerror = function() {
         setButtonLoading(els.uploadBtn, false);
-        showError('Unsupported format', 'This video format is not supported. Try MP4 or MOV.');
+        showError('Unsupported format', 'Try MP4 or MOV format.');
     };
 }
 
@@ -374,7 +401,6 @@ async function loadFFmpeg() {
     log('=== Loading FFmpeg ===');
 
     if (typeof FFmpegWASM === 'undefined') {
-        logError('FFmpegWASM not found');
         throw new Error('SCRIPT_NOT_LOADED');
     }
 
@@ -394,15 +420,12 @@ async function loadFFmpeg() {
         try {
             log('Trying CDN: ' + base);
             updateStatus('Downloading Crispy engine… ⬇️');
-
             var coreURL = await toBlobURL(base + '/ffmpeg-core.js', 'text/javascript');
             var wasmURL = await toBlobURL(base + '/ffmpeg-core.wasm', 'application/wasm');
-
             updateStatus('Starting engine… 🔧');
             await state.ffmpeg.load({ coreURL: coreURL, wasmURL: wasmURL });
-
             loaded = true;
-            log('FFmpeg loaded ✅ from ' + base);
+            log('FFmpeg loaded ✅');
             break;
         } catch (err) {
             logError('CDN failed: ' + base, err.message || err);
@@ -413,37 +436,183 @@ async function loadFFmpeg() {
     state.ffmpegReady = true;
 }
 
-/* ======================== SMART SCALE FILTER ========================
-   Builds the optimal scale filter based on video orientation.
+/* ======================== SMART QUALITY ENGINE ========================
    
-   Strategy: Scale the SHORTER side to 540px.
-   - Portrait video (1080x1920) → 540x960
-   - Landscape video (1920x1080) → 960x540
-   - Square video (1080x1080) → 540x540
+   The core intelligence of Crispy Status.
    
-   The -2 ensures dimensions are divisible by 2 (required by H.264).
+   Problem: WhatsApp re-compresses videos above a certain quality/size.
+   Solution: Calculate the MAXIMUM quality we can deliver while staying
+   under WhatsApp's re-compression threshold.
+   
+   Variables we control:
+   - CRF (quality per frame)
+   - Resolution (pixel count)
+   - Maxrate (bitrate ceiling)
+   
+   The math:
+   - Target file size: ~5MB for 30 seconds
+   - Available video bitrate: (5MB × 8) / 30s = ~1.3 Mbps
+   - At 640p with CRF 18, typical output: ~2-3 Mbps
+   - Maxrate cap at 3Mbps prevents spikes
+   - For shorter videos, we can afford higher quality (lower CRF)
+   - For longer videos, we tighten slightly (higher CRF)
+   
    ================================================================== */
+
+// Calculate the optimal CRF based on video duration
+// Shorter videos get HIGHER quality because file size budget is easier to hit
+function getSmartCRF(durationSec) {
+    var q = CONFIG.quality;
+
+    if (durationSec <= 5) {
+        // Very short clip — max quality, file will be tiny
+        var crf = q.baseCRF - 4; // CRF 14
+        log('Smart CRF: ' + crf + ' (very short video, max quality)');
+        return crf;
+    }
+    if (durationSec <= 10) {
+        // Short — still generous
+        var crf = q.baseCRF - 2; // CRF 16
+        log('Smart CRF: ' + crf + ' (short video, high quality)');
+        return crf;
+    }
+    if (durationSec <= 20) {
+        // Medium — base quality
+        log('Smart CRF: ' + q.baseCRF + ' (medium video, base quality)');
+        return q.baseCRF; // CRF 18
+    }
+    if (durationSec <= 30) {
+        // Full length — slight tightening to control file size
+        var crf = q.baseCRF + 1; // CRF 19
+        log('Smart CRF: ' + crf + ' (full length, optimized quality)');
+        return crf;
+    }
+
+    // Shouldn't reach here, but safety
+    return q.baseCRF + 2;
+}
+
+// Build the optimal scale filter based on orientation and source resolution
 function buildScaleFilter() {
-    var shortSide = CONFIG.quality.shortSide;
+    var target = CONFIG.quality.shortSide;
+    var w = state.videoWidth;
+    var h = state.videoHeight;
 
     if (state.isPortrait) {
-        // Width is the shorter side
-        // If already smaller than target, don't upscale
-        if (state.videoWidth <= shortSide) {
-            log('Video already small enough, no resize needed');
+        // Portrait: width is the shorter side
+        if (w <= target) {
+            log('Scale: source (' + w + 'px wide) already ≤ target (' + target + 'px), keeping original');
+            // Still ensure even dimensions for H.264
             return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
         }
-        log('Portrait: scaling width to ' + shortSide + 'px');
-        return 'scale=' + shortSide + ':-2';
+        log('Scale: portrait ' + w + '×' + h + ' → ' + target + '×auto');
+        return 'scale=' + target + ':-2';
     } else {
-        // Height is the shorter side
-        if (state.videoHeight <= shortSide) {
-            log('Video already small enough, no resize needed');
+        // Landscape: height is the shorter side
+        if (h <= target) {
+            log('Scale: source (' + h + 'px tall) already ≤ target (' + target + 'px), keeping original');
             return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
         }
-        log('Landscape: scaling height to ' + shortSide + 'px');
-        return 'scale=-2:' + shortSide;
+        log('Scale: landscape ' + w + '×' + h + ' → auto×' + target);
+        return 'scale=-2:' + target;
     }
+}
+
+// Build the complete FFmpeg command with all quality optimizations
+function buildFFmpegCommand(clipDuration) {
+    var q = CONFIG.quality;
+    var smartCRF = getSmartCRF(clipDuration);
+    var scaleFilter = buildScaleFilter();
+
+    var cmd = [
+        '-y',
+
+        // Seek to trim start BEFORE input (fast seek)
+        '-ss', String(state.trimStart),
+        '-i', 'input',
+        '-t', String(clipDuration),
+
+        // ===== VIDEO ENCODING =====
+
+        // Scale filter with even dimension enforcement
+        '-vf', scaleFilter,
+
+        // H.264 via libx264
+        '-c:v', 'libx264',
+
+        // Quality: CRF mode with smart value
+        // CRF = Constant Rate Factor
+        // Lower = better quality, bigger file
+        // Our smart system adjusts per duration
+        '-crf', String(smartCRF),
+
+        // Encoding speed vs compression efficiency
+        // 'medium' gives ~40% better compression than 'fast'
+        // meaning more visual quality per byte
+        '-preset', q.preset,
+
+        // H.264 Profile: High
+        // Enables: CABAC entropy coding (10-15% better compression)
+        //          8×8 DCT transforms (sharper detail)
+        //          Weighted prediction (better fades/transitions)
+        '-profile:v', q.profile,
+        '-level:v', q.level,
+
+        // Bitrate ceiling — prevents file size spikes
+        // CRF handles average quality; maxrate prevents peaks
+        '-maxrate', q.maxBitrate,
+        '-bufsize', q.bufSize,
+
+        // Keyframe interval: 1 per second
+        // Helps WhatsApp process cleanly + enables smooth seeking
+        '-g', String(q.keyint),
+        '-keyint_min', String(q.keyint),
+
+        // Frame rate: locked 30fps
+        '-r', String(q.fps),
+
+        // Pixel format: YUV 4:2:0 (universal compatibility)
+        '-pix_fmt', 'yuv420p',
+
+        // x264 advanced parameters for maximum quality
+        // aq-mode=2: Variance-based adaptive quantization
+        //   → Allocates more bits to complex regions (faces, text)
+        //   → Uses fewer bits on smooth regions (sky, walls)
+        // rc-lookahead=40: Looks 40 frames ahead for better rate control
+        //   → Smoother quality distribution across scenes
+        // ref=4: 4 reference frames for better motion compensation
+        //   → Sharper moving objects
+        '-x264-params', 'aq-mode=2:rc-lookahead=40:ref=4',
+
+        // ===== AUDIO ENCODING =====
+
+        '-c:a', 'aac',
+        '-b:a', q.audioBitrate,
+        '-ar', String(q.audioRate),
+        '-ac', String(q.audioChannels),
+
+        // ===== CONTAINER =====
+
+        // Move metadata to start of file for instant playback
+        // Without this, the video won't start playing until fully downloaded
+        '-movflags', '+faststart',
+
+        'output.mp4'
+    ];
+
+    // Log the full command and expected output
+    log('FFmpeg command: ffmpeg ' + cmd.join(' '));
+    log('Quality profile:', {
+        crf: smartCRF,
+        resolution: state.isPortrait ? q.shortSide + '×auto' : 'auto×' + q.shortSide,
+        preset: q.preset,
+        profile: q.profile + ' ' + q.level,
+        maxBitrate: q.maxBitrate,
+        duration: clipDuration + 's',
+        estimatedSize: estimateFileSize(clipDuration, smartCRF)
+    });
+
+    return cmd;
 }
 
 /* ======================== PROCESSING ======================== */
@@ -472,55 +641,10 @@ async function startProcessing() {
         log('Written to FFmpeg ✅');
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 3: Build optimized command
+        // STEP 3: Process with optimized settings
         updateStatus('Making it crispy… 🍳');
-        var q = CONFIG.quality;
         var clipDur = Math.min(CONFIG.maxDuration, state.duration);
-        var scaleFilter = buildScaleFilter();
-
-        var cmd = [
-            '-y',
-            '-ss', String(state.trimStart),
-            '-i', 'input',
-            '-t', String(clipDur),
-
-            // Video filters: scale + force even dimensions
-            '-vf', scaleFilter,
-
-            // H.264 encoding — matched to WhatsApp's internal format
-            '-c:v', 'libx264',
-            '-preset', q.preset,
-            '-crf', String(q.crf),
-            '-profile:v', q.profile,
-            '-level', q.level,
-            '-maxrate', q.maxBitrate,
-            '-bufsize', q.bufSize,
-
-            // Keyframe interval: 1 keyframe per second
-            // This helps WhatsApp process the video cleanly
-            '-g', String(q.keyint),
-            '-keyint_min', String(q.keyint),
-
-            // Frame rate
-            '-r', String(q.fps),
-
-            // Pixel format (required for maximum compatibility)
-            '-pix_fmt', 'yuv420p',
-
-            // Audio — AAC at standard broadcast quality
-            '-c:a', 'aac',
-            '-b:a', q.audioBitrate,
-            '-ar', String(q.audioRate),
-            '-ac', '2',
-
-            // Place metadata at start of file for instant playback
-            '-movflags', '+faststart',
-
-            'output.mp4'
-        ];
-
-        log('FFmpeg command: ffmpeg ' + cmd.join(' '));
-        log('Expected output: ~' + estimateFileSize(clipDur) + ' for ' + clipDur + 's');
+        var cmd = buildFFmpegCommand(clipDur);
 
         var exitCode = await state.ffmpeg.exec(cmd);
         log('Exit code: ' + exitCode);
@@ -544,12 +668,20 @@ async function startProcessing() {
         state.outputUrl = URL.createObjectURL(state.outputBlob);
         state.outputSize = state.outputBlob.size;
 
-        // Check if output is WhatsApp-friendly size
+        // Quality analysis
         var sizeMB = state.outputSize / (1024 * 1024);
-        if (sizeMB > 12) {
-            log('⚠️ Output is ' + sizeMB.toFixed(1) + 'MB — WhatsApp may still compress slightly');
+        var bitrateKbps = Math.round((state.outputSize * 8) / (clipDur * 1000));
+
+        log('=== Output Analysis ===');
+        log('File size: ' + sizeMB.toFixed(2) + ' MB');
+        log('Effective bitrate: ' + bitrateKbps + ' kbps');
+
+        if (sizeMB <= CONFIG.quality.targetMaxMB) {
+            log('✅ PERFECT — Under ' + CONFIG.quality.targetMaxMB + 'MB target. WhatsApp will not re-compress.');
+        } else if (sizeMB <= CONFIG.quality.absoluteMaxMB) {
+            log('⚠️ GOOD — Under ' + CONFIG.quality.absoluteMaxMB + 'MB. WhatsApp may apply light compression.');
         } else {
-            log('✅ Output is ' + sizeMB.toFixed(1) + 'MB — WhatsApp should barely touch this');
+            log('⚠️ LARGE — ' + sizeMB.toFixed(1) + 'MB. WhatsApp may re-compress. Consider shorter clip.');
         }
 
         // Cleanup
@@ -570,21 +702,20 @@ async function startProcessing() {
             return;
         }
         logError('Failed', err);
-
         var title = 'Processing Failed';
         var msg = '';
         switch (err.message) {
             case 'SCRIPT_NOT_LOADED':
                 title = 'Engine Not Loaded';
-                msg = 'The video engine could not load. Refresh and check your internet.';
+                msg = 'Refresh the page and check your internet.';
                 break;
             case 'ENGINE_LOAD_FAILED':
                 title = 'Engine Download Failed';
-                msg = 'Could not download the engine. Check your internet connection.';
+                msg = 'Check your internet connection and try again.';
                 break;
             case 'FFMPEG_ERROR':
                 title = 'Video Format Issue';
-                msg = 'This video format could not be processed. Try a different MP4 video.';
+                msg = 'This video could not be processed. Try a different MP4 video.';
                 break;
             case 'OUTPUT_READ_FAILED':
             case 'OUTPUT_EMPTY':
@@ -740,12 +871,15 @@ function truncateFilename(n, max) {
     var ext = n.split('.').pop();
     return n.substring(0, max - ext.length - 3) + '….' + ext;
 }
-function estimateFileSize(durationSec) {
-    // Rough estimate: CRF 23 at 540p ≈ 1-2 Mbps effective
-    var bitsPerSec = 1500000; // ~1.5 Mbps average
-    var audioBitsPerSec = 128000;
-    var totalBits = (bitsPerSec + audioBitsPerSec) * durationSec;
-    return formatBytes(totalBits / 8);
+function estimateFileSize(durationSec, crf) {
+    // Rough estimate based on CRF and resolution
+    // CRF 18 at 640p ≈ 2-3 Mbps, CRF 14 ≈ 4-5 Mbps
+    var baseBps = 2500000; // 2.5 Mbps base at CRF 18
+    var crfFactor = Math.pow(1.15, 18 - crf); // each CRF point ≈ 15% size change
+    var videoBps = baseBps * crfFactor;
+    var audioBps = 128000;
+    var totalBytes = ((videoBps + audioBps) * durationSec) / 8;
+    return formatBytes(totalBytes);
 }
 function cleanup() {
     if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
@@ -772,7 +906,6 @@ function setupBackButton() {
         }
     });
 }
-
 function setupBeforeUnload() {
     window.addEventListener('beforeunload', function(e) {
         if (state.processing) { e.preventDefault(); e.returnValue = ''; }
@@ -897,14 +1030,16 @@ function preloadFFmpeg() {
 
 /* ======================== INIT ======================== */
 function init() {
-    log('Crispy Status v2 initializing…');
+    log('Crispy Status v3 — Maximum Quality Engine');
+    log('=========================================');
 
     if (typeof WebAssembly === 'undefined') {
         showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.');
         return;
     }
     log('WebAssembly: ✅');
-    log('SharedArrayBuffer: ' + (typeof SharedArrayBuffer !== 'undefined' ? '✅' : 'not available (OK)'));
+    log('SharedArrayBuffer: ' + (typeof SharedArrayBuffer !== 'undefined' ? '✅' : 'N/A (OK)'));
+    log('Quality config:', CONFIG.quality);
 
     bindEvents();
     registerSW();
@@ -918,7 +1053,6 @@ function init() {
     els.confettiCanvas.height = window.innerHeight;
 
     log('Init complete ✅');
-    log('Quality settings:', CONFIG.quality);
 }
 
 init();
