@@ -10,10 +10,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Crispy Status">
-    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos.">
+    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy in full 1080p HD. No more blurry videos.">
 
     <meta property="og:title" content="Crispy Status — Sharp Status. Every Time.">
-    <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video so it stays HD.">
+    <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video to 1080p HD so it stays sharp.">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/og-image.png">
     <meta name="twitter:card" content="summary_large_image">
@@ -71,15 +71,16 @@
                 <p class="section-label">How it works</p>
                 <div class="steps">
                     <div class="step"><span class="step-num">1</span><span class="step-text">Pick a video</span></div>
-                    <div class="step"><span class="step-num">2</span><span class="step-text">We optimize it</span></div>
+                    <div class="step"><span class="step-num">2</span><span class="step-text">We optimize to 1080p</span></div>
                     <div class="step"><span class="step-num">3</span><span class="step-text">Post blur-free</span></div>
                 </div>
             </div>
 
         </div>
         <div class="ad-banner" id="ad-home">
-            <span class="ad-placeholder"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8259966283788349"
-     crossorigin="anonymous"></script></span>
+            <span class="ad-placeholder">
+                <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8259966283788349" crossorigin="anonymous"></script>
+            </span>
         </div>
     </section>
 
@@ -147,13 +148,11 @@
             <p class="processing-fun-tip" id="fun-tip">💡 Crispy videos get more views!</p>
 
             <button id="cancel-btn" class="btn btn-ghost">Cancel</button>
-            <!-- Find the cancel button in the processing screen and add the bg-notice right after it -->
-            <button id="cancel-btn" class="btn btn-ghost">Cancel</button>
 
-        <div id="bg-notice" class="bg-notice hidden">
-    <span class="bg-notice-icon">📱</span>
-    <span class="bg-notice-text">You can switch apps — we'll notify you when done</span>
-</div>
+            <div id="bg-notice" class="bg-notice hidden">
+                <span class="bg-notice-icon">📱</span>
+                <span class="bg-notice-text">You can switch apps — we'll notify you when done</span>
+            </div>
 
         </div>
     </section>
@@ -206,28 +205,11 @@
 
         </div>
         <div class="ad-banner" id="ad-done">
-            <span class="ad-placeholder">Ad Space</span>
+            <span class="ad-placeholder">
+                <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8259966283788349" crossorigin="anonymous"></script>
+            </span>
         </div>
     </section>
-
-    <!-- ======================== PREMIUM MODAL ======================== -->
-    <div id="premium-modal" class="modal-overlay hidden" role="dialog" aria-modal="true"
-         aria-labelledby="premium-heading">
-        <div class="modal-card premium-card">
-            <div class="premium-badge" aria-hidden="true">🔥 PRO</div>
-            <h2 id="premium-heading">Go Unlimited</h2>
-            <p class="premium-sub">You've used your free video for today!</p>
-            <ul class="premium-perks">
-                <li><span>✅</span> Unlimited videos daily</li>
-                <li><span>⚡</span> Faster processing</li>
-                <li><span>🚫</span> No ads ever</li>
-                <li><span>📦</span> Batch processing</li>
-                <li><span>🎬</span> 1080p output</li>
-            </ul>
-            <button id="upgrade-btn" class="btn btn-premium">Upgrade — $9.99/mo</button>
-            <button id="premium-close-btn" class="btn btn-ghost">Maybe later</button>
-        </div>
-    </div>
 
     <!-- ======================== ERROR MODAL ======================== -->
     <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
@@ -242,7 +224,7 @@
 
 </div>
 
-<!-- Worker CORS patch — MUST load before FFmpeg -->
+<!-- Worker CORS patch -->
 <script>
 (function() {
     var OriginalWorker = window.Worker;
