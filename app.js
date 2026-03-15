@@ -1,25 +1,25 @@
 /* ==========================================================
    CRISPY STATUS — App Logic
-   Quality Engine v3 + Background Processing
-
-   Background strategy:
-   1. Screen Wake Lock — keeps screen on, prevents browser sleep
-   2. Notifications — alert user when done even if app is backgrounded
-   3. Visibility API — handles app switching gracefully
-   4. FFmpeg runs in Web Worker internally (throttle-resistant)
+   v4 — 1080p Output + Watermark + Unlimited Free
+   
+   Changes from v3:
+   - 1080p output for everyone (was 640p)
+   - Watermark overlay: "crispystatus.com" bottom-left
+   - No daily limits — unlimited processing
+   - Premium modal removed
+   - Quality settings retuned for 1080p
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
 var CONFIG = {
     maxDuration   : 30,
     maxFileSize   : 500,
-    dailyFreeUses : 1,
 
     quality: {
-        shortSide    : 640,
-        baseCRF      : 18,
-        maxBitrate   : '3000k',
-        bufSize      : '6000k',
+        shortSide    : 1080,       // was 640 — now full HD
+        baseCRF      : 23,         // was 18 — tuned for 1080p (visually equivalent)
+        maxBitrate   : '4000k',    // was 3000k — higher ceiling for 1080p
+        bufSize      : '8000k',    // was 6000k — 2× maxBitrate
         audioBitrate : '128k',
         audioRate    : 44100,
         audioChannels: 2,
@@ -28,8 +28,15 @@ var CONFIG = {
         profile      : 'high',
         level        : '4.0',
         keyint       : 30,
-        targetMaxMB  : 5.5,
-        absoluteMaxMB: 8,
+        targetMaxMB  : 12,         // was 5.5 — more room for 1080p
+        absoluteMaxMB: 16,         // was 8 — WhatsApp's actual limit
+    },
+
+    watermark: {
+        text     : 'crispystatus.com',
+        fontSize : 18,
+        opacity  : 0.7,
+        padding  : 16,            // px from edges
     },
 
     cdnUrls: [
@@ -51,6 +58,8 @@ var FUN_MESSAGES = [
     '🚀 Almost there…',
     '📐 Optimizing every pixel…',
     '🏆 Making it Status-worthy…',
+    '📺 Upgrading to 1080p…',
+    '🏷️ Stamping the crispy seal…',
 ];
 
 var QUALITY_TIPS = [
@@ -87,6 +96,7 @@ var state = {
     cancelled    : false,
     tipsShown    : false,
     installPrompt: null,
+    hasWatermark : false,
 
     // Background processing
     wakeLock     : null,
@@ -142,9 +152,6 @@ var els = {
     tipsSection      : $('tips-section'),
     tipsList         : $('tips-list'),
     newVideoBtn      : $('new-video-btn'),
-    premiumModal     : $('premium-modal'),
-    upgradeBtn       : $('upgrade-btn'),
-    premiumCloseBtn  : $('premium-close-btn'),
     errorModal       : $('error-modal'),
     errorMsg         : $('error-msg'),
     errorCloseBtn    : $('error-close-btn'),
@@ -169,32 +176,23 @@ async function toBlobURL(url, mimeType) {
    BACKGROUND PROCESSING SYSTEM
    ======================================================== */
 
-/* ---------- SCREEN WAKE LOCK ----------
-   Prevents the device screen from turning off.
-   When screen stays on, browser keeps full JS execution.
-   This is the single most effective background trick.
-   --------------------------------------- */
 async function acquireWakeLock() {
     if (!('wakeLock' in navigator)) {
-        log('Wake Lock API not supported — screen may turn off');
+        log('Wake Lock API not supported');
         return;
     }
-
     try {
         state.wakeLock = await navigator.wakeLock.request('screen');
-        log('🔒 Screen Wake Lock acquired — screen will stay on');
-
-        // Wake Lock can be released by the system (e.g., low battery)
-        // Re-acquire it if that happens while we're still processing
+        log('🔒 Screen Wake Lock acquired');
         state.wakeLock.addEventListener('release', function() {
-            log('⚠️ Wake Lock was released by system');
+            log('⚠️ Wake Lock released by system');
             if (state.processing) {
-                log('Still processing — attempting to re-acquire…');
+                log('Still processing — re-acquiring…');
                 acquireWakeLock();
             }
         });
     } catch (err) {
-        log('Wake Lock request failed: ' + err.message);
+        log('Wake Lock failed: ' + err.message);
     }
 }
 
@@ -204,138 +202,72 @@ async function releaseWakeLock() {
             await state.wakeLock.release();
             state.wakeLock = null;
             log('🔓 Screen Wake Lock released');
-        } catch (e) {
-            // Already released
-        }
+        } catch (e) { }
     }
 }
 
-/* ---------- NOTIFICATIONS ----------
-   Ask permission early, then notify when processing
-   completes while app is in background.
-   ------------------------------------- */
 async function requestNotificationPermission() {
-    if (!('Notification' in window)) {
-        log('Notifications not supported');
-        return;
-    }
-
-    if (Notification.permission === 'granted') {
-        state.notifPermission = 'granted';
-        log('Notification permission: already granted ✅');
-        return;
-    }
-
-    if (Notification.permission === 'denied') {
-        state.notifPermission = 'denied';
-        log('Notification permission: denied by user');
-        return;
-    }
-
-    // Don't ask immediately — wait for a natural moment
-    // We'll ask when they start their first processing
+    if (!('Notification' in window)) { log('Notifications not supported'); return; }
+    if (Notification.permission === 'granted') { state.notifPermission = 'granted'; return; }
+    if (Notification.permission === 'denied') { state.notifPermission = 'denied'; return; }
     state.notifPermission = 'default';
-    log('Notification permission: will ask when needed');
 }
 
 async function askNotificationPermission() {
     if (!('Notification' in window)) return;
-    if (Notification.permission === 'granted') {
-        state.notifPermission = 'granted';
-        return;
-    }
+    if (Notification.permission === 'granted') { state.notifPermission = 'granted'; return; }
     if (Notification.permission === 'denied') return;
-
     try {
         var result = await Notification.requestPermission();
         state.notifPermission = result;
         log('Notification permission: ' + result);
-    } catch (e) {
-        log('Notification permission request failed');
-    }
+    } catch (e) { log('Notification permission request failed'); }
 }
 
 function sendNotification(title, body) {
     if (state.notifPermission !== 'granted') return;
-    if (document.visibilityState === 'visible') return; // Don't notify if app is in foreground
-
+    if (document.visibilityState === 'visible') return;
     try {
         var notif = new Notification(title, {
             body: body,
             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230B0B1A"/><text x="50" y="68" font-size="52" text-anchor="middle">🔥</text></svg>',
-            badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="50" y="68" font-size="52" text-anchor="middle">🔥</text></svg>',
             tag: 'crispy-status',
             requireInteraction: true,
             vibrate: [200, 100, 200],
         });
-
-        // When user taps the notification, bring app to foreground
-        notif.onclick = function() {
-            window.focus();
-            notif.close();
-        };
-
+        notif.onclick = function() { window.focus(); notif.close(); };
         log('📬 Notification sent: ' + title);
-    } catch (e) {
-        log('Notification failed: ' + e.message);
-    }
+    } catch (e) { log('Notification failed: ' + e.message); }
 }
 
-/* ---------- VISIBILITY CHANGE ----------
-   Detects when user switches away from the app
-   and when they come back. Handles reconnection
-   and progress updates.
-   ---------------------------------------- */
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'hidden') {
-            // User switched away
             log('📱 App moved to background');
             state.wasHidden = true;
-
-            if (state.processing) {
-                log('Processing continues in background…');
-                // Re-acquire wake lock (some browsers release it on hide)
-                acquireWakeLock();
-            }
+            if (state.processing) acquireWakeLock();
         } else {
-            // User came back
             log('📱 App returned to foreground');
-
             if (state.wasHidden && state.processing) {
-                log('Welcome back — processing is still running');
                 showToast('Still crisping your video… 🍳', 'info', 2000);
             }
-
             if (state.wasHidden && !state.processing && state.outputUrl) {
-                log('Processing completed while in background');
                 showToast('Your video is ready! 🔥', 'success');
             }
-
             state.wasHidden = false;
-
-            // Re-acquire wake lock if still processing
-            if (state.processing) {
-                acquireWakeLock();
-            }
+            if (state.processing) acquireWakeLock();
         }
     });
 }
 
-/* ---------- PAGE FREEZE HANDLER ----------
-   Modern browsers fire 'freeze' when they're about to
-   suspend the page. We can't prevent it, but we can log it.
-   ----------------------------------------- */
 function setupFreezeHandler() {
     if ('onfreeze' in document) {
         document.addEventListener('freeze', function() {
-            log('❄️ Browser is freezing the page — processing may pause');
+            log('❄️ Browser freezing page');
         });
         document.addEventListener('resume', function() {
-            log('▶️ Browser resumed the page — processing should continue');
-            if (state.processing) {
-                showToast('Processing resumed ▶️', 'info', 2000);
-            }
+            log('▶️ Browser resumed page');
+            if (state.processing) showToast('Processing resumed ▶️', 'info', 2000);
         });
     }
 }
@@ -424,32 +356,7 @@ function haptic(style) {
     navigator.vibrate(p[style || 'light'] || [12]);
 }
 
-/* ======================== DAILY LIMIT ======================== */
-function canUseToday() {
-    var today = new Date().toDateString();
-    var saved = localStorage.getItem('crispy_date');
-    var count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
-    if (saved !== today) return true;
-    return count < CONFIG.dailyFreeUses;
-}
-function markUsed() {
-    var today = new Date().toDateString();
-    var saved = localStorage.getItem('crispy_date');
-    var count = 0;
-    if (saved === today) count = parseInt(localStorage.getItem('crispy_count') || '0', 10);
-    localStorage.setItem('crispy_date', today);
-    localStorage.setItem('crispy_count', String(count + 1));
-}
-
 /* ======================== MODALS ======================== */
-function showPremium() {
-    els.premiumModal.classList.remove('hidden');
-    var card = els.premiumModal.querySelector('.modal-card');
-    card.style.animation = 'none'; void card.offsetWidth; card.style.animation = '';
-    haptic('medium');
-}
-function hidePremium() { els.premiumModal.classList.add('hidden'); }
-
 function showError(title, msg) {
     $('error-heading').textContent = title;
     els.errorMsg.textContent = msg;
@@ -589,48 +496,119 @@ async function loadFFmpeg() {
     state.ffmpegReady = true;
 }
 
+/* ======================== WATERMARK ======================== */
+async function createWatermarkImage() {
+    var wm = CONFIG.watermark;
+    var canvas = document.createElement('canvas');
+
+    // Measure text width first
+    canvas.width = 1;
+    canvas.height = 1;
+    var ctx = canvas.getContext('2d');
+    ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
+    var textWidth = Math.ceil(ctx.measureText(wm.text).width);
+
+    // Size canvas to fit text with padding
+    var hPad = 10;
+    var vPad = 8;
+    canvas.width = textWidth + hPad * 2;
+    canvas.height = wm.fontSize + vPad * 2;
+
+    // Must re-get context after resize
+    ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Shadow for readability on any video background
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+
+    // Semi-transparent white text
+    ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, ' + wm.opacity + ')';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(wm.text, hPad, canvas.height / 2);
+
+    log('Watermark image: ' + canvas.width + '×' + canvas.height);
+
+    return new Promise(function(resolve, reject) {
+        canvas.toBlob(function(blob) {
+            if (!blob) { reject(new Error('Watermark creation failed')); return; }
+            blob.arrayBuffer().then(function(buf) {
+                resolve(new Uint8Array(buf));
+            });
+        }, 'image/png');
+    });
+}
+
 /* ======================== SMART QUALITY ======================== */
 function getSmartCRF(durationSec) {
     var q = CONFIG.quality;
+    var crf, label;
     if (durationSec <= 5) {
-        log('Smart CRF: ' + (q.baseCRF - 4) + ' (very short, max quality)');
-        return q.baseCRF - 4;
+        crf = q.baseCRF - 3;
+        label = 'very short, max quality';
+    } else if (durationSec <= 10) {
+        crf = q.baseCRF - 2;
+        label = 'short, high quality';
+    } else if (durationSec <= 20) {
+        crf = q.baseCRF;
+        label = 'medium, base quality';
+    } else {
+        crf = q.baseCRF + 1;
+        label = 'full length, optimized';
     }
-    if (durationSec <= 10) {
-        log('Smart CRF: ' + (q.baseCRF - 2) + ' (short, high quality)');
-        return q.baseCRF - 2;
-    }
-    if (durationSec <= 20) {
-        log('Smart CRF: ' + q.baseCRF + ' (medium, base quality)');
-        return q.baseCRF;
-    }
-    log('Smart CRF: ' + (q.baseCRF + 1) + ' (full length, optimized)');
-    return q.baseCRF + 1;
+    log('Smart CRF: ' + crf + ' (' + label + ')');
+    return crf;
 }
 
 function buildScaleFilter() {
     var target = CONFIG.quality.shortSide;
     if (state.isPortrait) {
-        if (state.videoWidth <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        // Portrait: width is the short side
+        if (state.videoWidth <= target) {
+            log('Scale: native resolution (no upscale) — ' + state.videoWidth + '×' + state.videoHeight);
+            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        }
         log('Scale: portrait → ' + target + '×auto');
         return 'scale=' + target + ':-2';
     } else {
-        if (state.videoHeight <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        // Landscape: height is the short side
+        if (state.videoHeight <= target) {
+            log('Scale: native resolution (no upscale) — ' + state.videoWidth + '×' + state.videoHeight);
+            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+        }
         log('Scale: landscape → auto×' + target);
         return 'scale=-2:' + target;
     }
 }
 
-function buildFFmpegCommand(clipDuration) {
+function buildFFmpegCommand(clipDuration, hasWatermark) {
     var q = CONFIG.quality;
     var smartCRF = getSmartCRF(clipDuration);
+    var scaleExpr = buildScaleFilter();
+    var pad = CONFIG.watermark.padding;
 
-    return [
-        '-y',
-        '-ss', String(state.trimStart),
-        '-i', 'input',
-        '-t', String(clipDuration),
-        '-vf', buildScaleFilter(),
+    var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input'];
+
+    if (hasWatermark) {
+        // Two inputs: video + watermark PNG
+        // filter_complex: scale video → overlay watermark at bottom-left
+        cmd.push('-i', 'watermark.png');
+        cmd.push('-t', String(clipDuration));
+        cmd.push('-filter_complex',
+            '[0:v]' + scaleExpr + '[scaled];[scaled][1:v]overlay=' + pad + ':H-h-' + pad + '[outv]'
+        );
+        cmd.push('-map', '[outv]');
+        cmd.push('-map', '0:a?');
+    } else {
+        // Fallback: no watermark, simple scale filter
+        cmd.push('-t', String(clipDuration));
+        cmd.push('-vf', scaleExpr);
+    }
+
+    cmd.push(
         '-c:v', 'libx264',
         '-crf', String(smartCRF),
         '-preset', q.preset,
@@ -649,7 +627,9 @@ function buildFFmpegCommand(clipDuration) {
         '-ac', String(q.audioChannels),
         '-movflags', '+faststart',
         'output.mp4'
-    ];
+    );
+
+    return cmd;
 }
 
 /* ======================== PROCESSING ======================== */
@@ -663,18 +643,11 @@ async function startProcessing() {
     setProgress(0);
     startFunMessages();
 
-    // === BACKGROUND PROCESSING SETUP ===
-
-    // 1. Acquire Wake Lock — keeps screen on
+    // Background processing setup
     await acquireWakeLock();
-
-    // 2. Request notification permission (first time only)
-    //    We ask here because the user just took an action (natural moment)
     if (state.notifPermission === 'default') {
         await askNotificationPermission();
     }
-
-    // 3. Show background notice
     showBgNotice();
 
     log('Background processing enabled:', {
@@ -697,10 +670,24 @@ async function startProcessing() {
         await state.ffmpeg.writeFile('input', fileData);
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 3: Process
-        updateStatus('Making it crispy… 🍳');
+        // STEP 3: Create watermark
+        state.hasWatermark = false;
+        try {
+            updateStatus('Preparing watermark… 🏷️');
+            var watermarkData = await createWatermarkImage();
+            await state.ffmpeg.writeFile('watermark.png', watermarkData);
+            state.hasWatermark = true;
+            log('Watermark written ✅');
+        } catch (wmErr) {
+            logError('Watermark creation failed — proceeding without', wmErr);
+            state.hasWatermark = false;
+        }
+        if (state.cancelled) throw new Error('CANCELLED');
+
+        // STEP 4: Process
+        updateStatus('Making it crispy in 1080p… 🍳');
         var clipDur = Math.min(CONFIG.maxDuration, state.duration);
-        var cmd = buildFFmpegCommand(clipDur);
+        var cmd = buildFFmpegCommand(clipDur, state.hasWatermark);
         log('FFmpeg command: ffmpeg ' + cmd.join(' '));
 
         var exitCode = await state.ffmpeg.exec(cmd);
@@ -709,7 +696,7 @@ async function startProcessing() {
         if (exitCode !== 0) throw new Error('FFMPEG_ERROR');
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 4: Read output
+        // STEP 5: Read output
         updateStatus('Wrapping up… 🎁');
         var outputData;
         try {
@@ -727,29 +714,28 @@ async function startProcessing() {
         // Analysis
         var sizeMB = state.outputSize / (1024 * 1024);
         var elapsed = ((Date.now() - state.processStartTime) / 1000).toFixed(1);
-        log('✅ Done in ' + elapsed + 's | Output: ' + sizeMB.toFixed(2) + 'MB');
+        log('✅ Done in ' + elapsed + 's | Output: ' + sizeMB.toFixed(2) + 'MB | Watermark: ' + (state.hasWatermark ? 'yes' : 'no'));
 
         if (sizeMB <= CONFIG.quality.targetMaxMB) {
             log('✅ PERFECT — WhatsApp will not re-compress');
         } else if (sizeMB <= CONFIG.quality.absoluteMaxMB) {
             log('⚠️ GOOD — WhatsApp may apply light compression');
+        } else {
+            log('⚠️ LARGE — file may exceed WhatsApp limit');
         }
 
         // Cleanup temp files
         try {
             await state.ffmpeg.deleteFile('input');
             await state.ffmpeg.deleteFile('output.mp4');
+            if (state.hasWatermark) await state.ffmpeg.deleteFile('watermark.png');
         } catch (e) { }
 
-        // === BACKGROUND COMPLETION ===
-
-        // Release wake lock
+        // Background completion
         await releaseWakeLock();
-
-        // Send notification if app is in background
         sendNotification(
             '🔥 Your video is crispy!',
-            'Tap to download your optimized video. Processed in ' + elapsed + 's.'
+            'Tap to download your 1080p optimized video. Processed in ' + elapsed + 's.'
         );
 
         haptic('success');
@@ -766,8 +752,6 @@ async function startProcessing() {
         }
 
         logError('Failed', err);
-
-        // Send error notification if in background
         sendNotification('😬 Processing failed', 'Tap to try again with a different video.');
 
         var title = 'Processing Failed';
@@ -810,22 +794,16 @@ function cancelProcessing() {
 
 /* ======================== BACKGROUND NOTICE ======================== */
 function showBgNotice() {
-    if (els.bgNotice) {
-        els.bgNotice.classList.remove('hidden');
-    }
+    if (els.bgNotice) els.bgNotice.classList.remove('hidden');
 }
 function hideBgNotice() {
-    if (els.bgNotice) {
-        els.bgNotice.classList.add('hidden');
-    }
+    if (els.bgNotice) els.bgNotice.classList.add('hidden');
 }
 
 /* ======================== PROGRESS ======================== */
 function setProgress(pct) {
     els.progressFill.style.width = pct + '%';
     els.progressText.textContent = pct + ' %';
-
-    // Update title so user can see progress in task switcher
     if (state.processing) {
         document.title = pct + '% — Crispy Status';
     }
@@ -849,7 +827,6 @@ function startFunMessages() {
 }
 function stopFunMessages() {
     clearInterval(funTimer);
-    // Restore original title
     document.title = 'Crispy Status — Sharp WhatsApp Status. Every Time.';
 }
 
@@ -884,7 +861,6 @@ function downloadVideo() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    markUsed();
     showToast('Video saved! Post it to Status now 🔥', 'success');
     if (!state.tipsShown) {
         state.tipsShown = true;
@@ -899,7 +875,6 @@ function shareToWhatsApp() {
         var file = new File([state.outputBlob], 'crispy-status.mp4', { type: 'video/mp4' });
         if (navigator.canShare({ files: [file] })) {
             navigator.share({ files: [file] }).then(function() {
-                markUsed();
                 showToast('Shared! 🚀', 'success');
             }).catch(function() {});
             return;
@@ -969,6 +944,7 @@ function cleanup() {
     state.objectUrl = null; state.outputUrl = null;
     state.outputBlob = null; state.file = null;
     state.tipsShown = false; state.videoWidth = 0; state.videoHeight = 0;
+    state.hasWatermark = false;
     els.fileInput.value = ''; els.donePreview.src = ''; els.trimVideo.src = '';
 }
 
@@ -997,15 +973,17 @@ function setupBeforeUnload() {
 /* ======================== EVENTS ======================== */
 function bindEvents() {
 
+    // Upload — no daily limit check, always available
     els.uploadBtn.addEventListener('click', function() {
-        if (!canUseToday()) { showPremium(); return; }
-        haptic('light'); els.fileInput.click();
+        haptic('light');
+        els.fileInput.click();
     });
     els.fileInput.addEventListener('change', function(e) {
         var f = e.target.files && e.target.files[0];
         if (f) handleFileSelect(f);
     });
 
+    // Trim
     els.trimBackBtn.addEventListener('click', function() {
         haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
     });
@@ -1045,8 +1023,10 @@ function bindEvents() {
         haptic('medium'); els.trimVideo.pause(); startProcessing();
     });
 
+    // Processing
     els.cancelBtn.addEventListener('click', function() { haptic('light'); cancelProcessing(); });
 
+    // Done
     els.donePlayBtn.addEventListener('click', function() {
         haptic('light');
         var v = els.donePreview;
@@ -1062,29 +1042,27 @@ function bindEvents() {
     els.downloadBtn.addEventListener('click', downloadVideo);
     els.shareBtn.addEventListener('click', shareToWhatsApp);
 
+    // New video — no daily limit check
     els.newVideoBtn.addEventListener('click', function() {
         haptic('light');
-        if (!canUseToday()) { showPremium(); return; }
-        cleanup(); showScreen('home-screen');
+        cleanup();
+        showScreen('home-screen');
     });
 
-    els.premiumCloseBtn.addEventListener('click', function() { haptic('light'); hidePremium(); });
-    els.upgradeBtn.addEventListener('click', function() {
-        haptic('medium'); showToast('Premium coming soon! 🚀', 'info');
-    });
+    // Error modal
     els.errorCloseBtn.addEventListener('click', function() {
         haptic('light'); hideError(); showScreen('home-screen');
     });
-    els.premiumModal.addEventListener('click', function(e) { if (e.target === els.premiumModal) hidePremium(); });
     els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
 
+    // Keyboard
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            if (!els.premiumModal.classList.contains('hidden')) hidePremium();
             if (!els.errorModal.classList.contains('hidden')) hideError();
         }
     });
 
+    // Resize
     window.addEventListener('resize', function() {
         els.confettiCanvas.width = window.innerWidth;
         els.confettiCanvas.height = window.innerHeight;
@@ -1112,8 +1090,11 @@ function preloadFFmpeg() {
 
 /* ======================== INIT ======================== */
 function init() {
-    log('Crispy Status v3 + Background Processing');
+    log('Crispy Status v4 — 1080p + Watermark');
     log('==========================================');
+    log('Output: 1080p for everyone');
+    log('Watermark: ' + CONFIG.watermark.text);
+    log('Limits: NONE — unlimited processing');
 
     if (typeof WebAssembly === 'undefined') {
         showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.');
@@ -1121,8 +1102,8 @@ function init() {
     }
 
     log('WebAssembly: ✅');
-    log('Wake Lock API: ' + ('wakeLock' in navigator ? '✅' : '❌ not supported'));
-    log('Notifications: ' + ('Notification' in window ? '✅' : '❌ not supported'));
+    log('Wake Lock API: ' + ('wakeLock' in navigator ? '✅' : '❌'));
+    log('Notifications: ' + ('Notification' in window ? '✅' : '❌'));
     log('Visibility API: ' + ('visibilityState' in document ? '✅' : '❌'));
 
     bindEvents();
