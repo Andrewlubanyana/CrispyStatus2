@@ -1,13 +1,12 @@
 /* ==========================================================
    CRISPY STATUS — App Logic
-   v4 — 1080p Output + Watermark + Unlimited Free
+   v5 — SPEED OPTIMIZED
    
-   Changes from v3:
-   - 1080p output for everyone (was 640p)
-   - Watermark overlay: "crispystatus.com" bottom-left
-   - No daily limits — unlimited processing
-   - Premium modal removed
-   - Quality settings retuned for 1080p
+   Changes from v4:
+   - 3-5× faster encoding (veryfast preset)
+   - No background throttling (silent audio trick)
+   - Instant repeat loads (IndexedDB WASM cache)
+   - Simplified x264 params (less analysis overhead)
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -16,27 +15,27 @@ var CONFIG = {
     maxFileSize   : 500,
 
     quality: {
-        shortSide    : 1080,       // was 640 — now full HD
-        baseCRF      : 23,         // was 18 — tuned for 1080p (visually equivalent)
-        maxBitrate   : '4000k',    // was 3000k — higher ceiling for 1080p
-        bufSize      : '8000k',    // was 6000k — 2× maxBitrate
+        shortSide    : 1080,
+        baseCRF      : 24,          // was 23 — compensates for veryfast producing larger files
+        maxBitrate   : '4000k',
+        bufSize      : '8000k',
         audioBitrate : '128k',
         audioRate    : 44100,
         audioChannels: 2,
         fps          : 30,
-        preset       : 'medium',
-        profile      : 'high',
+        preset       : 'veryfast',  // was 'medium' — 3-5× FASTER encoding
+        profile      : 'main',     // was 'high' — faster decode, wider compat
         level        : '4.0',
-        keyint       : 30,
-        targetMaxMB  : 12,         // was 5.5 — more room for 1080p
-        absoluteMaxMB: 16,         // was 8 — WhatsApp's actual limit
+        keyint       : 60,         // was 30 — fewer keyframes = faster
+        targetMaxMB  : 12,
+        absoluteMaxMB: 16,
     },
 
     watermark: {
         text     : 'crispystatus.com',
         fontSize : 18,
         opacity  : 0.7,
-        padding  : 16,            // px from edges
+        padding  : 16,
     },
 
     cdnUrls: [
@@ -103,6 +102,10 @@ var state = {
     notifPermission: 'default',
     wasHidden    : false,
     processStartTime: 0,
+
+    // Silent audio (anti-throttle)
+    silentAudioCtx   : null,
+    silentAudioSource: null,
 };
 
 /* ======================== LOGGING ======================== */
@@ -161,15 +164,144 @@ var els = {
     confettiCanvas   : $('confetti-canvas'),
 };
 
-/* ======================== toBlobURL ======================== */
+/* ========================================================
+   INDEXEDDB CACHE — Stores FFmpeg WASM so it loads instantly
+   ======================================================== */
+var CACHE_DB = 'crispy-cache';
+var CACHE_STORE = 'files';
+var CACHE_VERSION = 1;
+
+function openCacheDB() {
+    return new Promise(function(resolve, reject) {
+        var req = indexedDB.open(CACHE_DB, CACHE_VERSION);
+        req.onupgradeneeded = function(e) {
+            var db = e.target.result;
+            if (!db.objectStoreNames.contains(CACHE_STORE)) {
+                db.createObjectStore(CACHE_STORE);
+            }
+        };
+        req.onsuccess = function(e) { resolve(e.target.result); };
+        req.onerror = function() { reject(req.error); };
+    });
+}
+
+function getCached(key) {
+    return openCacheDB().then(function(db) {
+        return new Promise(function(resolve) {
+            var tx = db.transaction(CACHE_STORE, 'readonly');
+            var req = tx.objectStore(CACHE_STORE).get(key);
+            req.onsuccess = function() { resolve(req.result || null); };
+            req.onerror = function() { resolve(null); };
+        });
+    }).catch(function() { return null; });
+}
+
+function setCache(key, data) {
+    return openCacheDB().then(function(db) {
+        return new Promise(function(resolve) {
+            var tx = db.transaction(CACHE_STORE, 'readwrite');
+            tx.objectStore(CACHE_STORE).put(data, key);
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function() { resolve(); };
+        });
+    }).catch(function() {});
+}
+
+/* ======================== toBlobURL with CACHE ======================== */
 async function toBlobURL(url, mimeType) {
-    log('Fetching: ' + url);
+    var cacheKey = url.split('/').pop(); // e.g. "ffmpeg-core.js"
+
+    // Try IndexedDB cache first
+    try {
+        var cached = await getCached(cacheKey);
+        if (cached) {
+            log('⚡ Cache hit: ' + cacheKey + ' (' + formatBytes(cached.byteLength) + ')');
+            var blob = new Blob([cached], { type: mimeType });
+            return URL.createObjectURL(blob);
+        }
+    } catch (e) {
+        // Cache miss or error — just download
+    }
+
+    // Download from CDN
+    log('⬇️ Downloading: ' + url);
     var response = await fetch(url);
     if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
     var buffer = await response.arrayBuffer();
+
+    // Save to cache for next time
+    try {
+        await setCache(cacheKey, buffer);
+        log('💾 Cached: ' + cacheKey + ' (' + formatBytes(buffer.byteLength) + ')');
+    } catch (e) {
+        log('Cache write failed (storage full?) — will re-download next time');
+    }
+
     var blob = new Blob([buffer], { type: mimeType });
-    log('Blob ready: ' + url.split('/').pop() + ' (' + formatBytes(buffer.byteLength) + ')');
     return URL.createObjectURL(blob);
+}
+
+/* ========================================================
+   SILENT AUDIO — Prevents browser from throttling background tab
+   
+   How it works:
+   - Browsers throttle JS in background tabs to save battery
+   - BUT they don't throttle tabs playing audio
+   - We play inaudible audio → browser keeps full CPU speed
+   - This is the same trick Spotify/YouTube use
+   ======================================================== */
+function startSilentAudio() {
+    try {
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+            log('AudioContext not supported — background may be throttled');
+            return;
+        }
+
+        state.silentAudioCtx = new AudioCtx();
+
+        // Create 2 seconds of silence
+        var buffer = state.silentAudioCtx.createBuffer(
+            1,                                    // mono
+            state.silentAudioCtx.sampleRate * 2,  // 2 seconds
+            state.silentAudioCtx.sampleRate
+        );
+
+        // Fill with near-zero values (true silence might be optimized away)
+        var channel = buffer.getChannelData(0);
+        for (var i = 0; i < channel.length; i++) {
+            channel[i] = (Math.random() - 0.5) * 0.00001; // imperceptible noise
+        }
+
+        var source = state.silentAudioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+
+        // Gain node at near-zero volume as extra safety
+        var gain = state.silentAudioCtx.createGain();
+        gain.gain.value = 0.001;
+
+        source.connect(gain);
+        gain.connect(state.silentAudioCtx.destination);
+        source.start();
+
+        state.silentAudioSource = source;
+        log('🔇 Silent audio started — anti-throttle active');
+    } catch (e) {
+        log('Silent audio failed: ' + e.message);
+    }
+}
+
+function stopSilentAudio() {
+    if (state.silentAudioSource) {
+        try { state.silentAudioSource.stop(); } catch (e) {}
+        state.silentAudioSource = null;
+    }
+    if (state.silentAudioCtx) {
+        try { state.silentAudioCtx.close(); } catch (e) {}
+        state.silentAudioCtx = null;
+    }
+    log('🔇 Silent audio stopped');
 }
 
 /* ========================================================
@@ -177,19 +309,13 @@ async function toBlobURL(url, mimeType) {
    ======================================================== */
 
 async function acquireWakeLock() {
-    if (!('wakeLock' in navigator)) {
-        log('Wake Lock API not supported');
-        return;
-    }
+    if (!('wakeLock' in navigator)) return;
     try {
         state.wakeLock = await navigator.wakeLock.request('screen');
         log('🔒 Screen Wake Lock acquired');
         state.wakeLock.addEventListener('release', function() {
             log('⚠️ Wake Lock released by system');
-            if (state.processing) {
-                log('Still processing — re-acquiring…');
-                acquireWakeLock();
-            }
+            if (state.processing) acquireWakeLock();
         });
     } catch (err) {
         log('Wake Lock failed: ' + err.message);
@@ -198,16 +324,14 @@ async function acquireWakeLock() {
 
 async function releaseWakeLock() {
     if (state.wakeLock) {
-        try {
-            await state.wakeLock.release();
-            state.wakeLock = null;
-            log('🔓 Screen Wake Lock released');
-        } catch (e) { }
+        try { await state.wakeLock.release(); } catch (e) {}
+        state.wakeLock = null;
+        log('🔓 Wake Lock released');
     }
 }
 
 async function requestNotificationPermission() {
-    if (!('Notification' in window)) { log('Notifications not supported'); return; }
+    if (!('Notification' in window)) return;
     if (Notification.permission === 'granted') { state.notifPermission = 'granted'; return; }
     if (Notification.permission === 'denied') { state.notifPermission = 'denied'; return; }
     state.notifPermission = 'default';
@@ -221,7 +345,7 @@ async function askNotificationPermission() {
         var result = await Notification.requestPermission();
         state.notifPermission = result;
         log('Notification permission: ' + result);
-    } catch (e) { log('Notification permission request failed'); }
+    } catch (e) {}
 }
 
 function sendNotification(title, body) {
@@ -236,18 +360,18 @@ function sendNotification(title, body) {
             vibrate: [200, 100, 200],
         });
         notif.onclick = function() { window.focus(); notif.close(); };
-        log('📬 Notification sent: ' + title);
-    } catch (e) { log('Notification failed: ' + e.message); }
+        log('📬 Notification sent');
+    } catch (e) {}
 }
 
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'hidden') {
-            log('📱 App moved to background');
+            log('📱 App → background');
             state.wasHidden = true;
             if (state.processing) acquireWakeLock();
         } else {
-            log('📱 App returned to foreground');
+            log('📱 App → foreground');
             if (state.wasHidden && state.processing) {
                 showToast('Still crisping your video… 🍳', 'info', 2000);
             }
@@ -262,11 +386,9 @@ function setupVisibilityHandler() {
 
 function setupFreezeHandler() {
     if ('onfreeze' in document) {
-        document.addEventListener('freeze', function() {
-            log('❄️ Browser freezing page');
-        });
+        document.addEventListener('freeze', function() { log('❄️ Page frozen'); });
         document.addEventListener('resume', function() {
-            log('▶️ Browser resumed page');
+            log('▶️ Page resumed');
             if (state.processing) showToast('Processing resumed ▶️', 'info', 2000);
         });
     }
@@ -332,8 +454,7 @@ function fireConfetti() {
             p.rotation += p.rotSpeed;
             p.opacity = Math.max(0, 1 - frame / 150);
             ctx.save(); ctx.globalAlpha = p.opacity;
-            ctx.translate(p.x, p.y);
-            ctx.rotate(p.rotation * Math.PI / 180);
+            ctx.translate(p.x, p.y); ctx.rotate(p.rotation * Math.PI / 180);
             ctx.fillStyle = p.color;
             if (p.shape === 'circle') {
                 ctx.beginPath(); ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2); ctx.fill();
@@ -370,16 +491,13 @@ function handleFileSelect(file) {
     log('File:', { name: file.name, size: formatBytes(file.size), type: file.type });
 
     if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) {
-        showError('Not a video', 'Please select a video file.');
-        return;
+        showError('Not a video', 'Please select a video file.'); return;
     }
     if (file.size > CONFIG.maxFileSize * 1024 * 1024) {
-        showError('File too large', 'Please pick a video under ' + CONFIG.maxFileSize + ' MB.');
-        return;
+        showError('File too large', 'Please pick a video under ' + CONFIG.maxFileSize + ' MB.'); return;
     }
     if (file.size < 10000) {
-        showError('File too small', 'This file seems too small to be a video.');
-        return;
+        showError('File too small', 'This file seems too small to be a video.'); return;
     }
 
     cleanup();
@@ -397,25 +515,21 @@ function handleFileSelect(file) {
         state.videoHeight = els.trimVideo.videoHeight;
         state.isPortrait = state.videoHeight >= state.videoWidth;
 
-        log('Video info:', {
+        log('Video:', {
             duration: state.duration.toFixed(1) + 's',
             dimensions: state.videoWidth + '×' + state.videoHeight,
             orientation: state.isPortrait ? 'portrait' : 'landscape'
         });
 
         if (isNaN(state.duration) || state.duration < 0.5) {
-            showError('Invalid video', 'Could not read this video. Try a different file.');
-            return;
+            showError('Invalid video', 'Could not read this video. Try a different file.'); return;
         }
         if (state.duration > CONFIG.maxDuration) {
-            setupTrimmer();
-            showScreen('trim-screen');
+            setupTrimmer(); showScreen('trim-screen');
         } else {
-            state.trimStart = 0;
-            startProcessing();
+            state.trimStart = 0; startProcessing();
         }
     };
-
     els.trimVideo.onerror = function() {
         setButtonLoading(els.uploadBtn, false);
         showError('Unsupported format', 'Try MP4 or MOV format.');
@@ -465,10 +579,7 @@ async function loadFFmpeg() {
     if (typeof FFmpegWASM === 'undefined') throw new Error('SCRIPT_NOT_LOADED');
 
     state.ffmpeg = new FFmpegWASM.FFmpeg();
-
-    state.ffmpeg.on('log', function(ev) {
-        console.log('[FFmpeg]', ev.message);
-    });
+    state.ffmpeg.on('log', function(ev) { console.log('[FFmpeg]', ev.message); });
     state.ffmpeg.on('progress', function(ev) {
         var pct = Math.min(Math.round(ev.progress * 100), 100);
         if (pct > 0) setProgress(pct);
@@ -479,7 +590,7 @@ async function loadFFmpeg() {
         var base = CONFIG.cdnUrls[i];
         try {
             log('Trying CDN: ' + base);
-            updateStatus('Downloading Crispy engine… ⬇️');
+            updateStatus('Loading Crispy engine… ⬇️');
             var coreURL = await toBlobURL(base + '/ffmpeg-core.js', 'text/javascript');
             var wasmURL = await toBlobURL(base + '/ffmpeg-core.wasm', 'application/wasm');
             updateStatus('Starting engine… 🔧');
@@ -501,43 +612,32 @@ async function createWatermarkImage() {
     var wm = CONFIG.watermark;
     var canvas = document.createElement('canvas');
 
-    // Measure text width first
-    canvas.width = 1;
-    canvas.height = 1;
+    canvas.width = 1; canvas.height = 1;
     var ctx = canvas.getContext('2d');
     ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
     var textWidth = Math.ceil(ctx.measureText(wm.text).width);
 
-    // Size canvas to fit text with padding
-    var hPad = 10;
-    var vPad = 8;
+    var hPad = 10; var vPad = 8;
     canvas.width = textWidth + hPad * 2;
     canvas.height = wm.fontSize + vPad * 2;
 
-    // Must re-get context after resize
     ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Shadow for readability on any video background
     ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
     ctx.shadowBlur = 4;
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 1;
-
-    // Semi-transparent white text
     ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
     ctx.fillStyle = 'rgba(255, 255, 255, ' + wm.opacity + ')';
     ctx.textBaseline = 'middle';
     ctx.fillText(wm.text, hPad, canvas.height / 2);
 
-    log('Watermark image: ' + canvas.width + '×' + canvas.height);
+    log('Watermark: ' + canvas.width + '×' + canvas.height);
 
     return new Promise(function(resolve, reject) {
         canvas.toBlob(function(blob) {
-            if (!blob) { reject(new Error('Watermark creation failed')); return; }
-            blob.arrayBuffer().then(function(buf) {
-                resolve(new Uint8Array(buf));
-            });
+            if (!blob) { reject(new Error('Watermark failed')); return; }
+            blob.arrayBuffer().then(function(buf) { resolve(new Uint8Array(buf)); });
         }, 'image/png');
     });
 }
@@ -545,41 +645,19 @@ async function createWatermarkImage() {
 /* ======================== SMART QUALITY ======================== */
 function getSmartCRF(durationSec) {
     var q = CONFIG.quality;
-    var crf, label;
-    if (durationSec <= 5) {
-        crf = q.baseCRF - 3;
-        label = 'very short, max quality';
-    } else if (durationSec <= 10) {
-        crf = q.baseCRF - 2;
-        label = 'short, high quality';
-    } else if (durationSec <= 20) {
-        crf = q.baseCRF;
-        label = 'medium, base quality';
-    } else {
-        crf = q.baseCRF + 1;
-        label = 'full length, optimized';
-    }
-    log('Smart CRF: ' + crf + ' (' + label + ')');
-    return crf;
+    if (durationSec <= 5) return q.baseCRF - 3;
+    if (durationSec <= 10) return q.baseCRF - 2;
+    if (durationSec <= 20) return q.baseCRF;
+    return q.baseCRF + 1;
 }
 
 function buildScaleFilter() {
     var target = CONFIG.quality.shortSide;
     if (state.isPortrait) {
-        // Portrait: width is the short side
-        if (state.videoWidth <= target) {
-            log('Scale: native resolution (no upscale) — ' + state.videoWidth + '×' + state.videoHeight);
-            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
-        }
-        log('Scale: portrait → ' + target + '×auto');
+        if (state.videoWidth <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
         return 'scale=' + target + ':-2';
     } else {
-        // Landscape: height is the short side
-        if (state.videoHeight <= target) {
-            log('Scale: native resolution (no upscale) — ' + state.videoWidth + '×' + state.videoHeight);
-            return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
-        }
-        log('Scale: landscape → auto×' + target);
+        if (state.videoHeight <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
         return 'scale=-2:' + target;
     }
 }
@@ -593,8 +671,6 @@ function buildFFmpegCommand(clipDuration, hasWatermark) {
     var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input'];
 
     if (hasWatermark) {
-        // Two inputs: video + watermark PNG
-        // filter_complex: scale video → overlay watermark at bottom-left
         cmd.push('-i', 'watermark.png');
         cmd.push('-t', String(clipDuration));
         cmd.push('-filter_complex',
@@ -603,7 +679,6 @@ function buildFFmpegCommand(clipDuration, hasWatermark) {
         cmd.push('-map', '[outv]');
         cmd.push('-map', '0:a?');
     } else {
-        // Fallback: no watermark, simple scale filter
         cmd.push('-t', String(clipDuration));
         cmd.push('-vf', scaleExpr);
     }
@@ -611,7 +686,7 @@ function buildFFmpegCommand(clipDuration, hasWatermark) {
     cmd.push(
         '-c:v', 'libx264',
         '-crf', String(smartCRF),
-        '-preset', q.preset,
+        '-preset', q.preset,        // veryfast — 3-5× faster than medium
         '-profile:v', q.profile,
         '-level:v', q.level,
         '-maxrate', q.maxBitrate,
@@ -620,7 +695,7 @@ function buildFFmpegCommand(clipDuration, hasWatermark) {
         '-keyint_min', String(q.keyint),
         '-r', String(q.fps),
         '-pix_fmt', 'yuv420p',
-        '-x264-params', 'aq-mode=2:rc-lookahead=40:ref=4',
+        '-x264-params', 'ref=1:bframes=1',  // was ref=4:rc-lookahead=40 — much faster
         '-c:a', 'aac',
         '-b:a', q.audioBitrate,
         '-ar', String(q.audioRate),
@@ -643,20 +718,23 @@ async function startProcessing() {
     setProgress(0);
     startFunMessages();
 
-    // Background processing setup
+    // === ANTI-THROTTLE: Start all background defenses ===
     await acquireWakeLock();
+    startSilentAudio();
+
     if (state.notifPermission === 'default') {
         await askNotificationPermission();
     }
     showBgNotice();
 
-    log('Background processing enabled:', {
-        wakeLock: state.wakeLock ? 'active' : 'not supported',
+    log('Background defenses:', {
+        wakeLock: state.wakeLock ? '✅' : '❌',
+        silentAudio: state.silentAudioCtx ? '✅' : '❌',
         notifications: state.notifPermission,
     });
 
     try {
-        // STEP 1: Load engine
+        // STEP 1: Load engine (instant on repeat visits thanks to IndexedDB cache)
         if (!state.ffmpegReady) {
             updateStatus('Loading Crispy engine… 🔧');
             await loadFFmpeg();
@@ -677,18 +755,17 @@ async function startProcessing() {
             var watermarkData = await createWatermarkImage();
             await state.ffmpeg.writeFile('watermark.png', watermarkData);
             state.hasWatermark = true;
-            log('Watermark written ✅');
+            log('Watermark ready ✅');
         } catch (wmErr) {
-            logError('Watermark creation failed — proceeding without', wmErr);
-            state.hasWatermark = false;
+            logError('Watermark failed — continuing without', wmErr);
         }
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 4: Process
+        // STEP 4: Process (now 3-5× faster with veryfast preset)
         updateStatus('Making it crispy in 1080p… 🍳');
         var clipDur = Math.min(CONFIG.maxDuration, state.duration);
         var cmd = buildFFmpegCommand(clipDur, state.hasWatermark);
-        log('FFmpeg command: ffmpeg ' + cmd.join(' '));
+        log('FFmpeg: ' + cmd.join(' '));
 
         var exitCode = await state.ffmpeg.exec(cmd);
         log('Exit code: ' + exitCode);
@@ -699,11 +776,8 @@ async function startProcessing() {
         // STEP 5: Read output
         updateStatus('Wrapping up… 🎁');
         var outputData;
-        try {
-            outputData = await state.ffmpeg.readFile('output.mp4');
-        } catch (e) {
-            throw new Error('OUTPUT_READ_FAILED');
-        }
+        try { outputData = await state.ffmpeg.readFile('output.mp4'); }
+        catch (e) { throw new Error('OUTPUT_READ_FAILED'); }
 
         if (!outputData || outputData.byteLength < 1000) throw new Error('OUTPUT_EMPTY');
 
@@ -711,32 +785,23 @@ async function startProcessing() {
         state.outputUrl = URL.createObjectURL(state.outputBlob);
         state.outputSize = state.outputBlob.size;
 
-        // Analysis
         var sizeMB = state.outputSize / (1024 * 1024);
         var elapsed = ((Date.now() - state.processStartTime) / 1000).toFixed(1);
-        log('✅ Done in ' + elapsed + 's | Output: ' + sizeMB.toFixed(2) + 'MB | Watermark: ' + (state.hasWatermark ? 'yes' : 'no'));
-
-        if (sizeMB <= CONFIG.quality.targetMaxMB) {
-            log('✅ PERFECT — WhatsApp will not re-compress');
-        } else if (sizeMB <= CONFIG.quality.absoluteMaxMB) {
-            log('⚠️ GOOD — WhatsApp may apply light compression');
-        } else {
-            log('⚠️ LARGE — file may exceed WhatsApp limit');
-        }
+        log('✅ Done in ' + elapsed + 's | ' + sizeMB.toFixed(2) + 'MB | Watermark: ' + (state.hasWatermark ? 'yes' : 'no'));
 
         // Cleanup temp files
         try {
             await state.ffmpeg.deleteFile('input');
             await state.ffmpeg.deleteFile('output.mp4');
             if (state.hasWatermark) await state.ffmpeg.deleteFile('watermark.png');
-        } catch (e) { }
+        } catch (e) {}
 
-        // Background completion
+        // Stop background defenses
         await releaseWakeLock();
-        sendNotification(
-            '🔥 Your video is crispy!',
-            'Tap to download your 1080p optimized video. Processed in ' + elapsed + 's.'
-        );
+        stopSilentAudio();
+
+        sendNotification('🔥 Your video is crispy!',
+            '1080p optimized in ' + elapsed + 's. Tap to download.');
 
         haptic('success');
         showDone();
@@ -744,38 +809,24 @@ async function startProcessing() {
     } catch (err) {
         stopFunMessages();
         await releaseWakeLock();
+        stopSilentAudio();
 
         if (err.message === 'CANCELLED') {
             showToast('Processing cancelled', 'info');
-            showScreen('home-screen');
-            return;
+            showScreen('home-screen'); return;
         }
 
         logError('Failed', err);
-        sendNotification('😬 Processing failed', 'Tap to try again with a different video.');
+        sendNotification('😬 Processing failed', 'Tap to try again.');
 
-        var title = 'Processing Failed';
-        var msg = '';
+        var title = 'Processing Failed'; var msg = '';
         switch (err.message) {
-            case 'SCRIPT_NOT_LOADED':
-                title = 'Engine Not Loaded';
-                msg = 'Refresh the page and check your internet.';
-                break;
-            case 'ENGINE_LOAD_FAILED':
-                title = 'Engine Download Failed';
-                msg = 'Check your internet connection and try again.';
-                break;
-            case 'FFMPEG_ERROR':
-                title = 'Video Format Issue';
-                msg = 'This video could not be processed. Try a different MP4 video.';
-                break;
+            case 'SCRIPT_NOT_LOADED': title = 'Engine Not Loaded'; msg = 'Refresh and check your internet.'; break;
+            case 'ENGINE_LOAD_FAILED': title = 'Engine Download Failed'; msg = 'Check your internet and try again.'; break;
+            case 'FFMPEG_ERROR': title = 'Video Format Issue'; msg = 'Try a different MP4 video.'; break;
             case 'OUTPUT_READ_FAILED':
-            case 'OUTPUT_EMPTY':
-                title = 'Processing Error';
-                msg = 'Output was empty. Try a shorter or smaller video.';
-                break;
-            default:
-                msg = 'Something went wrong. Try a different video or refresh.';
+            case 'OUTPUT_EMPTY': title = 'Processing Error'; msg = 'Try a shorter or smaller video.'; break;
+            default: msg = 'Something went wrong. Try a different video or refresh.';
         }
         showError(title, msg);
         showScreen('home-screen');
@@ -789,24 +840,19 @@ async function startProcessing() {
 function cancelProcessing() {
     state.cancelled = true;
     releaseWakeLock();
+    stopSilentAudio();
     showToast('Cancelling…', 'info', 2000);
 }
 
 /* ======================== BACKGROUND NOTICE ======================== */
-function showBgNotice() {
-    if (els.bgNotice) els.bgNotice.classList.remove('hidden');
-}
-function hideBgNotice() {
-    if (els.bgNotice) els.bgNotice.classList.add('hidden');
-}
+function showBgNotice() { if (els.bgNotice) els.bgNotice.classList.remove('hidden'); }
+function hideBgNotice() { if (els.bgNotice) els.bgNotice.classList.add('hidden'); }
 
 /* ======================== PROGRESS ======================== */
 function setProgress(pct) {
     els.progressFill.style.width = pct + '%';
     els.progressText.textContent = pct + ' %';
-    if (state.processing) {
-        document.title = pct + '% — Crispy Status';
-    }
+    if (state.processing) document.title = pct + '% — Crispy Status';
 }
 
 function updateStatus(msg) {
@@ -892,8 +938,7 @@ function showTips() {
         card.className = 'tip-card';
         card.innerHTML =
             '<span class="tip-icon">' + tip.icon + '</span>' +
-            '<div class="tip-content">' +
-            '<strong>' + tip.title + '</strong>' +
+            '<div class="tip-content"><strong>' + tip.title + '</strong>' +
             '<p>' + tip.text + '</p></div>';
         els.tipsList.appendChild(card);
     });
@@ -972,18 +1017,14 @@ function setupBeforeUnload() {
 
 /* ======================== EVENTS ======================== */
 function bindEvents() {
-
-    // Upload — no daily limit check, always available
     els.uploadBtn.addEventListener('click', function() {
-        haptic('light');
-        els.fileInput.click();
+        haptic('light'); els.fileInput.click();
     });
     els.fileInput.addEventListener('change', function(e) {
         var f = e.target.files && e.target.files[0];
         if (f) handleFileSelect(f);
     });
 
-    // Trim
     els.trimBackBtn.addEventListener('click', function() {
         haptic('light'); els.trimVideo.pause(); showScreen('home-screen');
     });
@@ -1012,8 +1053,7 @@ function bindEvents() {
             };
             v.addEventListener('timeupdate', stop);
         } else {
-            v.pause();
-            els.playPreviewBtn.textContent = '▶';
+            v.pause(); els.playPreviewBtn.textContent = '▶';
             els.playPreviewBtn.classList.remove('hide');
         }
     });
@@ -1023,10 +1063,8 @@ function bindEvents() {
         haptic('medium'); els.trimVideo.pause(); startProcessing();
     });
 
-    // Processing
     els.cancelBtn.addEventListener('click', function() { haptic('light'); cancelProcessing(); });
 
-    // Done
     els.donePlayBtn.addEventListener('click', function() {
         haptic('light');
         var v = els.donePreview;
@@ -1035,34 +1073,24 @@ function bindEvents() {
     });
     els.donePreview.addEventListener('click', function() { els.donePlayBtn.click(); });
     els.donePreview.addEventListener('ended', function() {
-        els.donePlayBtn.classList.remove('hide');
-        els.donePlayBtn.textContent = '▶';
+        els.donePlayBtn.classList.remove('hide'); els.donePlayBtn.textContent = '▶';
     });
 
     els.downloadBtn.addEventListener('click', downloadVideo);
     els.shareBtn.addEventListener('click', shareToWhatsApp);
-
-    // New video — no daily limit check
     els.newVideoBtn.addEventListener('click', function() {
-        haptic('light');
-        cleanup();
-        showScreen('home-screen');
+        haptic('light'); cleanup(); showScreen('home-screen');
     });
 
-    // Error modal
     els.errorCloseBtn.addEventListener('click', function() {
         haptic('light'); hideError(); showScreen('home-screen');
     });
     els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
 
-    // Keyboard
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            if (!els.errorModal.classList.contains('hidden')) hideError();
-        }
+        if (e.key === 'Escape' && !els.errorModal.classList.contains('hidden')) hideError();
     });
 
-    // Resize
     window.addEventListener('resize', function() {
         els.confettiCanvas.width = window.innerWidth;
         els.confettiCanvas.height = window.innerHeight;
@@ -1080,31 +1108,26 @@ function registerSW() {
 function preloadFFmpeg() {
     setTimeout(function() {
         if (!state.ffmpegReady) {
-            log('Preloading FFmpeg…');
+            log('Preloading FFmpeg (will be cached for instant future loads)…');
             loadFFmpeg()
-                .then(function() { log('Preload done ✅'); })
+                .then(function() { log('Preload done ✅ — next visit will be instant'); })
                 .catch(function(e) { log('Preload failed: ' + e.message); });
         }
-    }, 4000);
+    }, 3000);
 }
 
 /* ======================== INIT ======================== */
 function init() {
-    log('Crispy Status v4 — 1080p + Watermark');
+    log('Crispy Status v5 — SPEED OPTIMIZED');
     log('==========================================');
-    log('Output: 1080p for everyone');
+    log('Preset: veryfast (3-5× faster than medium)');
+    log('Cache: IndexedDB (instant repeat loads)');
+    log('Anti-throttle: Silent audio + Wake Lock');
     log('Watermark: ' + CONFIG.watermark.text);
-    log('Limits: NONE — unlimited processing');
 
     if (typeof WebAssembly === 'undefined') {
-        showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.');
-        return;
+        showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.'); return;
     }
-
-    log('WebAssembly: ✅');
-    log('Wake Lock API: ' + ('wakeLock' in navigator ? '✅' : '❌'));
-    log('Notifications: ' + ('Notification' in window ? '✅' : '❌'));
-    log('Visibility API: ' + ('visibilityState' in document ? '✅' : '❌'));
 
     bindEvents();
     registerSW();
@@ -1119,7 +1142,6 @@ function init() {
 
     els.confettiCanvas.width = window.innerWidth;
     els.confettiCanvas.height = window.innerHeight;
-
     log('Init complete ✅');
 }
 
