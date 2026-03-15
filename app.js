@@ -1,12 +1,12 @@
 /* ==========================================================
    CRISPY STATUS — App Logic
-   v5 — SPEED OPTIMIZED
+   v6 — Android Background Fix (PiP Progress)
    
-   Changes from v4:
-   - 3-5× faster encoding (veryfast preset)
-   - No background throttling (silent audio trick)
-   - Instant repeat loads (IndexedDB WASM cache)
-   - Simplified x264 params (less analysis overhead)
+   Changes from v5:
+   - PiP progress display prevents Android throttling
+   - Canvas-based progress shows % in floating window
+   - Falls back to "stay in app" warning if PiP unavailable
+   - Silent audio kept as secondary defense
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -16,17 +16,17 @@ var CONFIG = {
 
     quality: {
         shortSide    : 1080,
-        baseCRF      : 24,          // was 23 — compensates for veryfast producing larger files
+        baseCRF      : 24,
         maxBitrate   : '4000k',
         bufSize      : '8000k',
         audioBitrate : '128k',
         audioRate    : 44100,
         audioChannels: 2,
         fps          : 30,
-        preset       : 'veryfast',  // was 'medium' — 3-5× FASTER encoding
-        profile      : 'main',     // was 'high' — faster decode, wider compat
+        preset       : 'veryfast',
+        profile      : 'main',
         level        : '4.0',
-        keyint       : 60,         // was 30 — fewer keyframes = faster
+        keyint       : 60,
         targetMaxMB  : 12,
         absoluteMaxMB: 16,
     },
@@ -98,14 +98,24 @@ var state = {
     hasWatermark : false,
 
     // Background processing
-    wakeLock     : null,
-    notifPermission: 'default',
-    wasHidden    : false,
-    processStartTime: 0,
+    wakeLock         : null,
+    notifPermission  : 'default',
+    wasHidden        : false,
+    processStartTime : 0,
 
-    // Silent audio (anti-throttle)
+    // Silent audio (anti-throttle for desktop)
     silentAudioCtx   : null,
     silentAudioSource: null,
+
+    // PiP progress (anti-throttle for Android)
+    pipCanvas        : null,
+    pipCtx           : null,
+    pipVideo         : null,
+    pipStream        : null,
+    pipActive        : false,
+    pipUpdateTimer   : null,
+    pipProgress      : 0,
+    pipStatusText    : 'Starting…',
 };
 
 /* ======================== LOGGING ======================== */
@@ -165,7 +175,7 @@ var els = {
 };
 
 /* ========================================================
-   INDEXEDDB CACHE — Stores FFmpeg WASM so it loads instantly
+   INDEXEDDB CACHE — Instant repeat loads
    ======================================================== */
 var CACHE_DB = 'crispy-cache';
 var CACHE_STORE = 'files';
@@ -209,9 +219,7 @@ function setCache(key, data) {
 
 /* ======================== toBlobURL with CACHE ======================== */
 async function toBlobURL(url, mimeType) {
-    var cacheKey = url.split('/').pop(); // e.g. "ffmpeg-core.js"
-
-    // Try IndexedDB cache first
+    var cacheKey = url.split('/').pop();
     try {
         var cached = await getCached(cacheKey);
         if (cached) {
@@ -219,114 +227,304 @@ async function toBlobURL(url, mimeType) {
             var blob = new Blob([cached], { type: mimeType });
             return URL.createObjectURL(blob);
         }
-    } catch (e) {
-        // Cache miss or error — just download
-    }
+    } catch (e) {}
 
-    // Download from CDN
     log('⬇️ Downloading: ' + url);
     var response = await fetch(url);
     if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + url);
     var buffer = await response.arrayBuffer();
 
-    // Save to cache for next time
     try {
         await setCache(cacheKey, buffer);
         log('💾 Cached: ' + cacheKey + ' (' + formatBytes(buffer.byteLength) + ')');
-    } catch (e) {
-        log('Cache write failed (storage full?) — will re-download next time');
-    }
+    } catch (e) {}
 
     var blob = new Blob([buffer], { type: mimeType });
     return URL.createObjectURL(blob);
 }
 
 /* ========================================================
-   SILENT AUDIO — Prevents browser from throttling background tab
+   PICTURE-IN-PICTURE PROGRESS DISPLAY
    
-   How it works:
-   - Browsers throttle JS in background tabs to save battery
-   - BUT they don't throttle tabs playing audio
-   - We play inaudible audio → browser keeps full CPU speed
-   - This is the same trick Spotify/YouTube use
+   Why this works:
+   - Android Chrome throttles background tabs to save battery
+   - BUT pages with an active PiP video get FULL CPU priority
+   - We create a canvas → stream it as video → show in PiP
+   - The canvas draws real-time processing progress
+   - User sees progress even while in other apps
+   - Chrome gives us 100% CPU because PiP is active
+   ======================================================== */
+
+function isMobile() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function isPiPSupported() {
+    return document.pictureInPictureEnabled && typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
+}
+
+function drawPipFrame() {
+    var canvas = state.pipCanvas;
+    var ctx = state.pipCtx;
+    if (!canvas || !ctx) return;
+
+    var w = canvas.width;   // 320
+    var h = canvas.height;  // 180
+    var pct = state.pipProgress;
+
+    // Background
+    ctx.fillStyle = '#0B0B1A';
+    ctx.fillRect(0, 0, w, h);
+
+    // Subtle gradient overlay
+    var grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(139, 92, 246, 0.1)');
+    grad.addColorStop(1, 'rgba(255, 107, 53, 0.1)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Emoji
+    ctx.font = '36px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🍳', w / 2, 42);
+
+    // Status text
+    ctx.font = '600 14px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.textAlign = 'center';
+    ctx.fillText(state.pipStatusText, w / 2, 68);
+
+    // Progress bar background
+    var barX = 30;
+    var barY = 90;
+    var barW = w - 60;
+    var barH = 16;
+    var barR = 8;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    roundRect(ctx, barX, barY, barW, barH, barR);
+    ctx.fill();
+
+    // Progress bar fill
+    if (pct > 0) {
+        var fillW = Math.max(barH, (barW * pct) / 100);
+        var gradient = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+        gradient.addColorStop(0, '#FF6B35');
+        gradient.addColorStop(1, '#FF3366');
+        ctx.fillStyle = gradient;
+        roundRect(ctx, barX, barY, fillW, barH, barR);
+        ctx.fill();
+    }
+
+    // Percentage text
+    ctx.font = '800 28px sans-serif';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.fillText(pct + '%', w / 2, 140);
+
+    // Brand
+    ctx.font = '500 10px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.fillText('crispystatus.com', w / 2, 170);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+async function startPiP() {
+    if (!isPiPSupported()) {
+        log('PiP not supported on this device');
+        return false;
+    }
+
+    try {
+        // Create canvas for rendering progress
+        state.pipCanvas = document.createElement('canvas');
+        state.pipCanvas.width = 320;
+        state.pipCanvas.height = 180;
+        state.pipCtx = state.pipCanvas.getContext('2d');
+
+        // Draw initial frame
+        state.pipProgress = 0;
+        state.pipStatusText = 'Starting…';
+        drawPipFrame();
+
+        // Capture canvas as video stream
+        state.pipStream = state.pipCanvas.captureStream(10);
+
+        // Create video element for PiP
+        state.pipVideo = document.createElement('video');
+        state.pipVideo.srcObject = state.pipStream;
+        state.pipVideo.muted = true;
+        state.pipVideo.playsInline = true;
+        state.pipVideo.style.position = 'fixed';
+        state.pipVideo.style.opacity = '0';
+        state.pipVideo.style.pointerEvents = 'none';
+        state.pipVideo.style.width = '1px';
+        state.pipVideo.style.height = '1px';
+        state.pipVideo.style.bottom = '0';
+        state.pipVideo.style.left = '0';
+        document.body.appendChild(state.pipVideo);
+
+        await state.pipVideo.play();
+
+        // Request PiP (must be during user gesture — called from button click)
+        await state.pipVideo.requestPictureInPicture();
+        state.pipActive = true;
+
+        // Update canvas every 500ms
+        state.pipUpdateTimer = setInterval(function() {
+            drawPipFrame();
+        }, 500);
+
+        // Handle user closing PiP
+        state.pipVideo.addEventListener('leavepictureinpicture', function() {
+            log('⚠️ User closed PiP window');
+            state.pipActive = false;
+            if (state.processing) {
+                showToast('⚠️ Keep the app open for fastest processing', 'info', 4000);
+            }
+        });
+
+        log('📺 PiP progress display started — Android won\'t throttle');
+        return true;
+
+    } catch (err) {
+        log('PiP failed: ' + err.message);
+        cleanupPiP();
+        return false;
+    }
+}
+
+function updatePiP(pct, statusText) {
+    state.pipProgress = pct;
+    if (statusText) state.pipStatusText = statusText;
+    if (state.pipActive) drawPipFrame();
+}
+
+function showPiPDone() {
+    if (!state.pipActive) return;
+
+    var ctx = state.pipCtx;
+    var w = state.pipCanvas.width;
+    var h = state.pipCanvas.height;
+
+    ctx.fillStyle = '#0B0B1A';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.font = '48px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✅', w / 2, 70);
+
+    ctx.font = '800 20px sans-serif';
+    ctx.fillStyle = '#22D67F';
+    ctx.fillText('Video is Crispy!', w / 2, 110);
+
+    ctx.font = '600 14px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.fillText('Tap to download', w / 2, 140);
+
+    ctx.font = '500 10px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.fillText('crispystatus.com', w / 2, 170);
+
+    // Auto-close PiP after 3 seconds
+    setTimeout(function() { closePiP(); }, 3000);
+}
+
+function closePiP() {
+    if (document.pictureInPictureElement) {
+        try { document.exitPictureInPicture(); } catch (e) {}
+    }
+    cleanupPiP();
+}
+
+function cleanupPiP() {
+    if (state.pipUpdateTimer) {
+        clearInterval(state.pipUpdateTimer);
+        state.pipUpdateTimer = null;
+    }
+    if (state.pipVideo) {
+        state.pipVideo.pause();
+        if (state.pipVideo.srcObject) {
+            state.pipVideo.srcObject.getTracks().forEach(function(t) { t.stop(); });
+            state.pipVideo.srcObject = null;
+        }
+        if (state.pipVideo.parentNode) {
+            state.pipVideo.parentNode.removeChild(state.pipVideo);
+        }
+        state.pipVideo = null;
+    }
+    state.pipStream = null;
+    state.pipCanvas = null;
+    state.pipCtx = null;
+    state.pipActive = false;
+    log('PiP cleaned up');
+}
+
+/* ========================================================
+   SILENT AUDIO — Desktop fallback anti-throttle
    ======================================================== */
 function startSilentAudio() {
     try {
         var AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) {
-            log('AudioContext not supported — background may be throttled');
-            return;
-        }
+        if (!AudioCtx) return;
 
         state.silentAudioCtx = new AudioCtx();
-
-        // Create 2 seconds of silence
-        var buffer = state.silentAudioCtx.createBuffer(
-            1,                                    // mono
-            state.silentAudioCtx.sampleRate * 2,  // 2 seconds
-            state.silentAudioCtx.sampleRate
-        );
-
-        // Fill with near-zero values (true silence might be optimized away)
+        var buffer = state.silentAudioCtx.createBuffer(1, state.silentAudioCtx.sampleRate * 2, state.silentAudioCtx.sampleRate);
         var channel = buffer.getChannelData(0);
         for (var i = 0; i < channel.length; i++) {
-            channel[i] = (Math.random() - 0.5) * 0.00001; // imperceptible noise
+            channel[i] = (Math.random() - 0.5) * 0.00001;
         }
-
         var source = state.silentAudioCtx.createBufferSource();
         source.buffer = buffer;
         source.loop = true;
-
-        // Gain node at near-zero volume as extra safety
         var gain = state.silentAudioCtx.createGain();
         gain.gain.value = 0.001;
-
         source.connect(gain);
         gain.connect(state.silentAudioCtx.destination);
         source.start();
-
         state.silentAudioSource = source;
-        log('🔇 Silent audio started — anti-throttle active');
+        log('🔇 Silent audio active');
     } catch (e) {
         log('Silent audio failed: ' + e.message);
     }
 }
 
 function stopSilentAudio() {
-    if (state.silentAudioSource) {
-        try { state.silentAudioSource.stop(); } catch (e) {}
-        state.silentAudioSource = null;
-    }
-    if (state.silentAudioCtx) {
-        try { state.silentAudioCtx.close(); } catch (e) {}
-        state.silentAudioCtx = null;
-    }
-    log('🔇 Silent audio stopped');
+    if (state.silentAudioSource) { try { state.silentAudioSource.stop(); } catch (e) {} state.silentAudioSource = null; }
+    if (state.silentAudioCtx) { try { state.silentAudioCtx.close(); } catch (e) {} state.silentAudioCtx = null; }
 }
 
 /* ========================================================
    BACKGROUND PROCESSING SYSTEM
    ======================================================== */
-
 async function acquireWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try {
         state.wakeLock = await navigator.wakeLock.request('screen');
-        log('🔒 Screen Wake Lock acquired');
+        log('🔒 Wake Lock acquired');
         state.wakeLock.addEventListener('release', function() {
-            log('⚠️ Wake Lock released by system');
             if (state.processing) acquireWakeLock();
         });
-    } catch (err) {
-        log('Wake Lock failed: ' + err.message);
-    }
+    } catch (err) { log('Wake Lock failed: ' + err.message); }
 }
 
 async function releaseWakeLock() {
     if (state.wakeLock) {
         try { await state.wakeLock.release(); } catch (e) {}
         state.wakeLock = null;
-        log('🔓 Wake Lock released');
     }
 }
 
@@ -344,7 +542,6 @@ async function askNotificationPermission() {
     try {
         var result = await Notification.requestPermission();
         state.notifPermission = result;
-        log('Notification permission: ' + result);
     } catch (e) {}
 }
 
@@ -355,23 +552,18 @@ function sendNotification(title, body) {
         var notif = new Notification(title, {
             body: body,
             icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230B0B1A"/><text x="50" y="68" font-size="52" text-anchor="middle">🔥</text></svg>',
-            tag: 'crispy-status',
-            requireInteraction: true,
-            vibrate: [200, 100, 200],
+            tag: 'crispy-status', requireInteraction: true, vibrate: [200, 100, 200],
         });
         notif.onclick = function() { window.focus(); notif.close(); };
-        log('📬 Notification sent');
     } catch (e) {}
 }
 
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'hidden') {
-            log('📱 App → background');
             state.wasHidden = true;
             if (state.processing) acquireWakeLock();
         } else {
-            log('📱 App → foreground');
             if (state.wasHidden && state.processing) {
                 showToast('Still crisping your video… 🍳', 'info', 2000);
             }
@@ -388,7 +580,6 @@ function setupFreezeHandler() {
     if ('onfreeze' in document) {
         document.addEventListener('freeze', function() { log('❄️ Page frozen'); });
         document.addEventListener('resume', function() {
-            log('▶️ Page resumed');
             if (state.processing) showToast('Processing resumed ▶️', 'info', 2000);
         });
     }
@@ -409,8 +600,7 @@ function showScreen(id) {
 
 /* ======================== TOAST ======================== */
 function showToast(message, type, duration) {
-    type = type || 'info';
-    duration = duration || 3000;
+    type = type || 'info'; duration = duration || 3000;
     var container = $('toast-container');
     var toast = document.createElement('div');
     toast.className = 'toast ' + type;
@@ -427,22 +617,16 @@ function showToast(message, type, duration) {
 function fireConfetti() {
     var canvas = els.confettiCanvas;
     var ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     var colors = ['#FF6B35', '#FF3366', '#8B5CF6', '#22D67F', '#FBBF24', '#06B6D4', '#fff'];
     var particles = [];
     for (var i = 0; i < 90; i++) {
         particles.push({
-            x: canvas.width / 2 + (Math.random() - 0.5) * 100,
-            y: canvas.height * 0.35,
-            vx: (Math.random() - 0.5) * 18,
-            vy: Math.random() * -20 - 8,
-            size: Math.random() * 8 + 4,
-            color: colors[Math.floor(Math.random() * colors.length)],
-            rotation: Math.random() * 360,
-            rotSpeed: (Math.random() - 0.5) * 12,
-            gravity: 0.4 + Math.random() * 0.2,
-            opacity: 1,
+            x: canvas.width / 2 + (Math.random() - 0.5) * 100, y: canvas.height * 0.35,
+            vx: (Math.random() - 0.5) * 18, vy: Math.random() * -20 - 8,
+            size: Math.random() * 8 + 4, color: colors[Math.floor(Math.random() * colors.length)],
+            rotation: Math.random() * 360, rotSpeed: (Math.random() - 0.5) * 12,
+            gravity: 0.4 + Math.random() * 0.2, opacity: 1,
             shape: Math.random() > 0.5 ? 'circle' : 'rect',
         });
     }
@@ -451,16 +635,12 @@ function fireConfetti() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         particles.forEach(function(p) {
             p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.99;
-            p.rotation += p.rotSpeed;
-            p.opacity = Math.max(0, 1 - frame / 150);
+            p.rotation += p.rotSpeed; p.opacity = Math.max(0, 1 - frame / 150);
             ctx.save(); ctx.globalAlpha = p.opacity;
             ctx.translate(p.x, p.y); ctx.rotate(p.rotation * Math.PI / 180);
             ctx.fillStyle = p.color;
-            if (p.shape === 'circle') {
-                ctx.beginPath(); ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2); ctx.fill();
-            } else {
-                ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-            }
+            if (p.shape === 'circle') { ctx.beginPath(); ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2); ctx.fill(); }
+            else { ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size); }
             ctx.restore();
         });
         frame++;
@@ -504,7 +684,6 @@ function handleFileSelect(file) {
     state.file = file;
     state.originalSize = file.size;
     state.objectUrl = URL.createObjectURL(file);
-
     setButtonLoading(els.uploadBtn, true);
     els.trimVideo.src = state.objectUrl;
 
@@ -522,7 +701,7 @@ function handleFileSelect(file) {
         });
 
         if (isNaN(state.duration) || state.duration < 0.5) {
-            showError('Invalid video', 'Could not read this video. Try a different file.'); return;
+            showError('Invalid video', 'Could not read this video.'); return;
         }
         if (state.duration > CONFIG.maxDuration) {
             setupTrimmer(); showScreen('trim-screen');
@@ -545,10 +724,8 @@ function setButtonLoading(btn, loading) {
 function setupTrimmer() {
     var maxStart = Math.max(0, state.duration - CONFIG.maxDuration);
     var clipDur = Math.min(CONFIG.maxDuration, state.duration);
-    els.trimSlider.min = 0;
-    els.trimSlider.max = maxStart;
-    els.trimSlider.value = 0;
-    els.trimSlider.step = 0.1;
+    els.trimSlider.min = 0; els.trimSlider.max = maxStart;
+    els.trimSlider.value = 0; els.trimSlider.step = 0.1;
     state.trimStart = 0;
     els.trimFileName.textContent = truncateFilename(state.file.name, 25);
     els.trimFileDur.textContent = formatTime(state.duration) + ' total';
@@ -556,8 +733,7 @@ function setupTrimmer() {
     updateTrimUI();
     els.playPreviewBtn.classList.remove('hide');
     els.playPreviewBtn.textContent = '▶';
-    els.trimVideo.pause();
-    els.trimVideo.currentTime = 0;
+    els.trimVideo.pause(); els.trimVideo.currentTime = 0;
 }
 
 function updateTrimUI() {
@@ -573,9 +749,7 @@ function updateTrimUI() {
 
 /* ======================== FFMPEG ======================== */
 async function loadFFmpeg() {
-    if (state.ffmpegReady) { log('FFmpeg already loaded'); return; }
-
-    log('=== Loading FFmpeg ===');
+    if (state.ffmpegReady) return;
     if (typeof FFmpegWASM === 'undefined') throw new Error('SCRIPT_NOT_LOADED');
 
     state.ffmpeg = new FFmpegWASM.FFmpeg();
@@ -602,7 +776,6 @@ async function loadFFmpeg() {
             logError('CDN failed: ' + base, err.message || err);
         }
     }
-
     if (!loaded) throw new Error('ENGINE_LOAD_FAILED');
     state.ffmpegReady = true;
 }
@@ -611,28 +784,21 @@ async function loadFFmpeg() {
 async function createWatermarkImage() {
     var wm = CONFIG.watermark;
     var canvas = document.createElement('canvas');
-
     canvas.width = 1; canvas.height = 1;
     var ctx = canvas.getContext('2d');
     ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
     var textWidth = Math.ceil(ctx.measureText(wm.text).width);
-
     var hPad = 10; var vPad = 8;
     canvas.width = textWidth + hPad * 2;
     canvas.height = wm.fontSize + vPad * 2;
-
     ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'; ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1;
     ctx.font = '600 ' + wm.fontSize + 'px sans-serif';
     ctx.fillStyle = 'rgba(255, 255, 255, ' + wm.opacity + ')';
     ctx.textBaseline = 'middle';
     ctx.fillText(wm.text, hPad, canvas.height / 2);
-
-    log('Watermark: ' + canvas.width + '×' + canvas.height);
 
     return new Promise(function(resolve, reject) {
         canvas.toBlob(function(blob) {
@@ -676,34 +842,23 @@ function buildFFmpegCommand(clipDuration, hasWatermark) {
         cmd.push('-filter_complex',
             '[0:v]' + scaleExpr + '[scaled];[scaled][1:v]overlay=' + pad + ':H-h-' + pad + '[outv]'
         );
-        cmd.push('-map', '[outv]');
-        cmd.push('-map', '0:a?');
+        cmd.push('-map', '[outv]', '-map', '0:a?');
     } else {
         cmd.push('-t', String(clipDuration));
         cmd.push('-vf', scaleExpr);
     }
 
     cmd.push(
-        '-c:v', 'libx264',
-        '-crf', String(smartCRF),
-        '-preset', q.preset,        // veryfast — 3-5× faster than medium
-        '-profile:v', q.profile,
-        '-level:v', q.level,
-        '-maxrate', q.maxBitrate,
-        '-bufsize', q.bufSize,
-        '-g', String(q.keyint),
-        '-keyint_min', String(q.keyint),
-        '-r', String(q.fps),
-        '-pix_fmt', 'yuv420p',
-        '-x264-params', 'ref=1:bframes=1',  // was ref=4:rc-lookahead=40 — much faster
-        '-c:a', 'aac',
-        '-b:a', q.audioBitrate,
-        '-ar', String(q.audioRate),
-        '-ac', String(q.audioChannels),
-        '-movflags', '+faststart',
-        'output.mp4'
+        '-c:v', 'libx264', '-crf', String(smartCRF),
+        '-preset', q.preset, '-profile:v', q.profile,
+        '-level:v', q.level, '-maxrate', q.maxBitrate,
+        '-bufsize', q.bufSize, '-g', String(q.keyint),
+        '-keyint_min', String(q.keyint), '-r', String(q.fps),
+        '-pix_fmt', 'yuv420p', '-x264-params', 'ref=1:bframes=1',
+        '-c:a', 'aac', '-b:a', q.audioBitrate,
+        '-ar', String(q.audioRate), '-ac', String(q.audioChannels),
+        '-movflags', '+faststart', 'output.mp4'
     );
-
     return cmd;
 }
 
@@ -718,9 +873,20 @@ async function startProcessing() {
     setProgress(0);
     startFunMessages();
 
-    // === ANTI-THROTTLE: Start all background defenses ===
+    // === ANTI-THROTTLE: Layer all defenses ===
     await acquireWakeLock();
     startSilentAudio();
+
+    // PiP for Android (must be called during user gesture chain)
+    var pipStarted = false;
+    if (isMobile() && isPiPSupported()) {
+        pipStarted = await startPiP();
+    }
+
+    if (!pipStarted && isMobile()) {
+        // No PiP available — show strong "stay in app" warning
+        showToast('⚠️ Keep this app open for fastest processing', 'info', 5000);
+    }
 
     if (state.notifPermission === 'default') {
         await askNotificationPermission();
@@ -730,19 +896,22 @@ async function startProcessing() {
     log('Background defenses:', {
         wakeLock: state.wakeLock ? '✅' : '❌',
         silentAudio: state.silentAudioCtx ? '✅' : '❌',
+        pip: pipStarted ? '✅' : '❌',
         notifications: state.notifPermission,
     });
 
     try {
-        // STEP 1: Load engine (instant on repeat visits thanks to IndexedDB cache)
+        // STEP 1: Load engine
         if (!state.ffmpegReady) {
             updateStatus('Loading Crispy engine… 🔧');
+            updatePiP(0, 'Loading engine…');
             await loadFFmpeg();
         }
         if (state.cancelled) throw new Error('CANCELLED');
 
         // STEP 2: Read file
         updateStatus('Reading your video… 📖');
+        updatePiP(0, 'Reading video…');
         var fileData = new Uint8Array(await state.file.arrayBuffer());
         log('File read: ' + formatBytes(fileData.byteLength));
         await state.ffmpeg.writeFile('input', fileData);
@@ -751,43 +920,40 @@ async function startProcessing() {
         // STEP 3: Create watermark
         state.hasWatermark = false;
         try {
-            updateStatus('Preparing watermark… 🏷️');
+            updatePiP(0, 'Adding watermark…');
             var watermarkData = await createWatermarkImage();
             await state.ffmpeg.writeFile('watermark.png', watermarkData);
             state.hasWatermark = true;
-            log('Watermark ready ✅');
         } catch (wmErr) {
-            logError('Watermark failed — continuing without', wmErr);
+            logError('Watermark failed', wmErr);
         }
         if (state.cancelled) throw new Error('CANCELLED');
 
-        // STEP 4: Process (now 3-5× faster with veryfast preset)
+        // STEP 4: Process
         updateStatus('Making it crispy in 1080p… 🍳');
+        updatePiP(0, 'Making it crispy…');
         var clipDur = Math.min(CONFIG.maxDuration, state.duration);
         var cmd = buildFFmpegCommand(clipDur, state.hasWatermark);
         log('FFmpeg: ' + cmd.join(' '));
 
         var exitCode = await state.ffmpeg.exec(cmd);
-        log('Exit code: ' + exitCode);
-
         if (exitCode !== 0) throw new Error('FFMPEG_ERROR');
         if (state.cancelled) throw new Error('CANCELLED');
 
         // STEP 5: Read output
         updateStatus('Wrapping up… 🎁');
+        updatePiP(100, 'Almost done…');
         var outputData;
         try { outputData = await state.ffmpeg.readFile('output.mp4'); }
         catch (e) { throw new Error('OUTPUT_READ_FAILED'); }
-
         if (!outputData || outputData.byteLength < 1000) throw new Error('OUTPUT_EMPTY');
 
         state.outputBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
         state.outputUrl = URL.createObjectURL(state.outputBlob);
         state.outputSize = state.outputBlob.size;
 
-        var sizeMB = state.outputSize / (1024 * 1024);
         var elapsed = ((Date.now() - state.processStartTime) / 1000).toFixed(1);
-        log('✅ Done in ' + elapsed + 's | ' + sizeMB.toFixed(2) + 'MB | Watermark: ' + (state.hasWatermark ? 'yes' : 'no'));
+        log('✅ Done in ' + elapsed + 's | ' + formatBytes(state.outputSize));
 
         // Cleanup temp files
         try {
@@ -799,6 +965,7 @@ async function startProcessing() {
         // Stop background defenses
         await releaseWakeLock();
         stopSilentAudio();
+        showPiPDone();
 
         sendNotification('🔥 Your video is crispy!',
             '1080p optimized in ' + elapsed + 's. Tap to download.');
@@ -810,6 +977,7 @@ async function startProcessing() {
         stopFunMessages();
         await releaseWakeLock();
         stopSilentAudio();
+        closePiP();
 
         if (err.message === 'CANCELLED') {
             showToast('Processing cancelled', 'info');
@@ -841,6 +1009,7 @@ function cancelProcessing() {
     state.cancelled = true;
     releaseWakeLock();
     stopSilentAudio();
+    closePiP();
     showToast('Cancelling…', 'info', 2000);
 }
 
@@ -853,6 +1022,9 @@ function setProgress(pct) {
     els.progressFill.style.width = pct + '%';
     els.progressText.textContent = pct + ' %';
     if (state.processing) document.title = pct + '% — Crispy Status';
+
+    // Update PiP display too
+    updatePiP(pct, pct < 95 ? 'Making it crispy…' : 'Almost done…');
 }
 
 function updateStatus(msg) {
@@ -892,7 +1064,6 @@ function showDone() {
     state.tipsShown = false;
     els.tipsSection.classList.add('hidden');
     els.tipsList.innerHTML = '';
-
     showScreen('done-screen');
     setTimeout(function() { fireConfetti(); }, 300);
 }
@@ -902,16 +1073,10 @@ function downloadVideo() {
     if (!state.outputUrl) return;
     haptic('medium');
     var a = document.createElement('a');
-    a.href = state.outputUrl;
-    a.download = 'crispy-status.mp4';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = state.outputUrl; a.download = 'crispy-status.mp4';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     showToast('Video saved! Post it to Status now 🔥', 'success');
-    if (!state.tipsShown) {
-        state.tipsShown = true;
-        setTimeout(function() { showTips(); }, 600);
-    }
+    if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
 function shareToWhatsApp() {
@@ -936,22 +1101,16 @@ function showTips() {
     QUALITY_TIPS.forEach(function(tip) {
         var card = document.createElement('div');
         card.className = 'tip-card';
-        card.innerHTML =
-            '<span class="tip-icon">' + tip.icon + '</span>' +
-            '<div class="tip-content"><strong>' + tip.title + '</strong>' +
-            '<p>' + tip.text + '</p></div>';
+        card.innerHTML = '<span class="tip-icon">' + tip.icon + '</span><div class="tip-content"><strong>' + tip.title + '</strong><p>' + tip.text + '</p></div>';
         els.tipsList.appendChild(card);
     });
-    setTimeout(function() {
-        els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 350);
+    setTimeout(function() { els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 350);
 }
 
 /* ======================== PWA ======================== */
 function setupInstallPrompt() {
     window.addEventListener('beforeinstallprompt', function(e) {
-        e.preventDefault();
-        state.installPrompt = e;
+        e.preventDefault(); state.installPrompt = e;
         if (!localStorage.getItem('crispy_install_dismissed')) {
             setTimeout(function() { els.installPrompt.classList.remove('hidden'); }, 5000);
         }
@@ -959,8 +1118,7 @@ function setupInstallPrompt() {
     els.installYes.addEventListener('click', async function() {
         if (!state.installPrompt) return;
         await state.installPrompt.prompt();
-        state.installPrompt = null;
-        els.installPrompt.classList.add('hidden');
+        state.installPrompt = null; els.installPrompt.classList.add('hidden');
         showToast('Installed! 📲', 'success');
     });
     els.installDismiss.addEventListener('click', function() {
@@ -1017,12 +1175,9 @@ function setupBeforeUnload() {
 
 /* ======================== EVENTS ======================== */
 function bindEvents() {
-    els.uploadBtn.addEventListener('click', function() {
-        haptic('light'); els.fileInput.click();
-    });
+    els.uploadBtn.addEventListener('click', function() { haptic('light'); els.fileInput.click(); });
     els.fileInput.addEventListener('change', function(e) {
-        var f = e.target.files && e.target.files[0];
-        if (f) handleFileSelect(f);
+        var f = e.target.files && e.target.files[0]; if (f) handleFileSelect(f);
     });
 
     els.trimBackBtn.addEventListener('click', function() {
@@ -1041,20 +1196,17 @@ function bindEvents() {
         var v = els.trimVideo;
         if (v.paused) {
             v.currentTime = state.trimStart; v.muted = false; v.play();
-            els.playPreviewBtn.textContent = '⏸';
-            els.playPreviewBtn.classList.add('hide');
+            els.playPreviewBtn.textContent = '⏸'; els.playPreviewBtn.classList.add('hide');
             var stopAt = state.trimStart + CONFIG.maxDuration;
             var stop = function() {
                 if (v.currentTime >= stopAt) {
                     v.pause(); v.removeEventListener('timeupdate', stop);
-                    els.playPreviewBtn.textContent = '▶';
-                    els.playPreviewBtn.classList.remove('hide');
+                    els.playPreviewBtn.textContent = '▶'; els.playPreviewBtn.classList.remove('hide');
                 }
             };
             v.addEventListener('timeupdate', stop);
         } else {
-            v.pause(); els.playPreviewBtn.textContent = '▶';
-            els.playPreviewBtn.classList.remove('hide');
+            v.pause(); els.playPreviewBtn.textContent = '▶'; els.playPreviewBtn.classList.remove('hide');
         }
     });
 
@@ -1078,15 +1230,10 @@ function bindEvents() {
 
     els.downloadBtn.addEventListener('click', downloadVideo);
     els.shareBtn.addEventListener('click', shareToWhatsApp);
-    els.newVideoBtn.addEventListener('click', function() {
-        haptic('light'); cleanup(); showScreen('home-screen');
-    });
+    els.newVideoBtn.addEventListener('click', function() { haptic('light'); cleanup(); showScreen('home-screen'); });
 
-    els.errorCloseBtn.addEventListener('click', function() {
-        haptic('light'); hideError(); showScreen('home-screen');
-    });
+    els.errorCloseBtn.addEventListener('click', function() { haptic('light'); hideError(); showScreen('home-screen'); });
     els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
-
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && !els.errorModal.classList.contains('hidden')) hideError();
     });
@@ -1108,9 +1255,9 @@ function registerSW() {
 function preloadFFmpeg() {
     setTimeout(function() {
         if (!state.ffmpegReady) {
-            log('Preloading FFmpeg (will be cached for instant future loads)…');
+            log('Preloading FFmpeg…');
             loadFFmpeg()
-                .then(function() { log('Preload done ✅ — next visit will be instant'); })
+                .then(function() { log('Preload done ✅'); })
                 .catch(function(e) { log('Preload failed: ' + e.message); });
         }
     }, 3000);
@@ -1118,12 +1265,10 @@ function preloadFFmpeg() {
 
 /* ======================== INIT ======================== */
 function init() {
-    log('Crispy Status v5 — SPEED OPTIMIZED');
+    log('Crispy Status v6 — Android Background Fix');
     log('==========================================');
-    log('Preset: veryfast (3-5× faster than medium)');
-    log('Cache: IndexedDB (instant repeat loads)');
-    log('Anti-throttle: Silent audio + Wake Lock');
-    log('Watermark: ' + CONFIG.watermark.text);
+    log('PiP support: ' + (isPiPSupported() ? '✅' : '❌'));
+    log('Mobile: ' + (isMobile() ? 'yes' : 'no'));
 
     if (typeof WebAssembly === 'undefined') {
         showError('Browser Not Supported', 'Use Chrome, Firefox, Safari, or Edge.'); return;
