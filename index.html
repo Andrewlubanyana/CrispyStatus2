@@ -10,10 +10,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Crispy Status">
-    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy in full 1080p HD. No more blurry videos.">
+    <meta name="description" content="Make your WhatsApp Status videos sharp and crispy. No more blurry videos.">
 
     <meta property="og:title" content="Crispy Status — Sharp Status. Every Time.">
-    <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video to 1080p HD so it stays sharp.">
+    <meta property="og:description" content="Stop posting blurry WhatsApp Status videos. Crispy optimizes your video so it stays HD.">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/og-image.png">
     <meta name="twitter:card" content="summary_large_image">
@@ -23,6 +23,243 @@
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
 
     <link rel="stylesheet" href="styles.css">
+
+    <!-- Sprint 1 — New component styles -->
+    <style>
+        /* ============ WATERMARK TOGGLE ============ */
+        .wm-setting {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 12px 16px;
+            margin: 16px auto 0;
+            max-width: 340px;
+            gap: 10px;
+            transition: border-color 0.2s;
+        }
+        .wm-setting:hover { border-color: rgba(255,255,255,0.15); }
+        .wm-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: rgba(255,255,255,0.7);
+        }
+        .wm-info .wm-icon { font-size: 16px; }
+        .wm-toggle {
+            border: none;
+            border-radius: 20px;
+            padding: 5px 14px;
+            font-size: 12px;
+            font-weight: 800;
+            font-family: 'Nunito', sans-serif;
+            cursor: pointer;
+            transition: all 0.25s;
+            letter-spacing: 0.5px;
+        }
+        .wm-toggle.on {
+            background: rgba(34,214,127,0.2);
+            color: #22D67F;
+        }
+        .wm-toggle.off {
+            background: rgba(255,107,53,0.2);
+            color: #FF6B35;
+        }
+
+        /* ============ PROCESSING ETA ============ */
+        .processing-eta {
+            text-align: center;
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
+            margin-top: 6px;
+            min-height: 20px;
+            transition: opacity 0.3s;
+        }
+
+        /* ============ BEFORE/AFTER COMPARISON ============ */
+        .compare-section {
+            margin: 20px 0 16px;
+        }
+        .compare-container {
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+            border-radius: 16px;
+            background: #111;
+            cursor: ew-resize;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .compare-img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .compare-before {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            clip-path: inset(0 50% 0 0);
+            z-index: 2;
+        }
+        .compare-handle {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            width: 4px;
+            height: 100%;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transform: translateX(-50%);
+            pointer-events: none;
+        }
+        .compare-handle-line {
+            flex: 1;
+            width: 3px;
+            background: #fff;
+            border-radius: 2px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.5);
+        }
+        .compare-handle-circle {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #fff;
+            color: #0B0B1A;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 800;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            flex-shrink: 0;
+            margin: 4px 0;
+        }
+        .compare-labels {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 4px 0;
+        }
+        .compare-label {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+        .compare-label-before { color: #FF3366; }
+        .compare-label-after { color: #22D67F; }
+
+        /* ============ WATERMARK AD MODAL ============ */
+        .wm-ad-body { text-align: center; }
+        .wm-ad-container {
+            background: rgba(255,255,255,0.03);
+            border: 1px dashed rgba(255,255,255,0.1);
+            border-radius: 12px;
+            min-height: 120px;
+            margin: 16px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255,255,255,0.3);
+            font-size: 13px;
+        }
+        .wm-countdown {
+            margin: 12px 0 20px;
+        }
+        .wm-countdown-track {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        .wm-countdown-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #FF6B35, #FF3366);
+            border-radius: 3px;
+            transition: width 1s linear;
+        }
+        .wm-countdown-text {
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
+        }
+        .btn-wm-done {
+            opacity: 0.4;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        .btn-wm-done.ready {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* ============ RATING MODAL ============ */
+        .rating-stars {
+            font-size: 36px;
+            margin-bottom: 8px;
+            animation: ratingPulse 2s ease-in-out infinite;
+        }
+        @keyframes ratingPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        .rating-count {
+            color: #FF6B35;
+            font-weight: 800;
+        }
+        .rating-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        .btn-love {
+            background: linear-gradient(135deg, #FF6B35, #FF3366);
+            border: none;
+            color: #fff;
+            padding: 14px;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 800;
+            font-family: 'Nunito', sans-serif;
+            cursor: pointer;
+            transition: transform 0.15s;
+        }
+        .btn-love:active { transform: scale(0.96); }
+
+        /* ============ QUALITY SCORE BADGE ============ */
+        .quality-score {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: rgba(34,214,127,0.1);
+            border: 1px solid rgba(34,214,127,0.2);
+            border-radius: 12px;
+            padding: 10px 16px;
+            margin: 12px 0;
+        }
+        .quality-score-num {
+            font-size: 28px;
+            font-weight: 900;
+            color: #22D67F;
+        }
+        .quality-score-label {
+            font-size: 12px;
+            color: rgba(255,255,255,0.6);
+            line-height: 1.3;
+        }
+    </style>
 </head>
 <body>
 
@@ -67,11 +304,20 @@
             </button>
             <input type="file" id="file-input" accept="video/*" hidden>
 
+            <!-- WATERMARK TOGGLE -->
+            <div class="wm-setting" id="wm-setting">
+                <div class="wm-info">
+                    <span class="wm-icon">🏷️</span>
+                    <span id="wm-label">crispystatus.com watermark</span>
+                </div>
+                <button id="wm-toggle-btn" class="wm-toggle on">ON</button>
+            </div>
+
             <div class="how-it-works">
                 <p class="section-label">How it works</p>
                 <div class="steps">
                     <div class="step"><span class="step-num">1</span><span class="step-text">Pick a video</span></div>
-                    <div class="step"><span class="step-num">2</span><span class="step-text">We optimize to 1080p</span></div>
+                    <div class="step"><span class="step-num">2</span><span class="step-text">We optimize it</span></div>
                     <div class="step"><span class="step-num">3</span><span class="step-text">Post blur-free</span></div>
                 </div>
             </div>
@@ -145,6 +391,9 @@
                 <span id="progress-text" class="progress-pct">0 %</span>
             </div>
 
+            <!-- ETA DISPLAY -->
+            <p class="processing-eta" id="processing-eta"></p>
+
             <p class="processing-fun-tip" id="fun-tip">💡 Crispy videos get more views!</p>
 
             <button id="cancel-btn" class="btn btn-ghost">Cancel</button>
@@ -164,6 +413,33 @@
             <div class="done-header">
                 <div class="done-emoji" aria-hidden="true">✅</div>
                 <h2>Video is Crispy!</h2>
+            </div>
+
+            <!-- BEFORE/AFTER COMPARISON SLIDER -->
+            <div class="compare-section" id="compare-section" style="display:none">
+                <p class="section-label">📸 See the difference</p>
+                <div class="compare-container" id="compare-container">
+                    <img id="compare-after" class="compare-img" alt="With Crispy" />
+                    <img id="compare-before" class="compare-img compare-before" alt="Without Crispy" />
+                    <div class="compare-handle" id="compare-handle">
+                        <div class="compare-handle-line"></div>
+                        <div class="compare-handle-circle">◄►</div>
+                        <div class="compare-handle-line"></div>
+                    </div>
+                </div>
+                <div class="compare-labels">
+                    <span class="compare-label compare-label-before">Without Crispy</span>
+                    <span class="compare-label compare-label-after">With Crispy ✨</span>
+                </div>
+            </div>
+
+            <!-- QUALITY SCORE -->
+            <div class="quality-score" id="quality-score" style="display:none">
+                <span class="quality-score-num" id="quality-score-num">--</span>
+                <div class="quality-score-label">
+                    <strong>Quality Score</strong><br>
+                    <span id="quality-score-desc">WhatsApp ready</span>
+                </div>
             </div>
 
             <div class="done-preview-wrap">
@@ -211,6 +487,55 @@
         </div>
     </section>
 
+    <!-- ======================== WATERMARK AD MODAL ======================== -->
+    <div id="wm-ad-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+        <div class="modal-card wm-ad-body">
+            <div class="error-emoji" aria-hidden="true">🏷️</div>
+            <h2>Remove Watermark</h2>
+            <p>Watch for 5 seconds to go watermark-free for 24 hours</p>
+            <div class="wm-ad-container" id="wm-ad-container">
+                <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8259966283788349" crossorigin="anonymous"></script>
+                <span>Sponsored Content</span>
+            </div>
+            <div class="wm-countdown" id="wm-countdown">
+                <div class="wm-countdown-track">
+                    <div class="wm-countdown-fill" id="wm-countdown-fill"></div>
+                </div>
+                <span class="wm-countdown-text" id="wm-countdown-text">5s remaining</span>
+            </div>
+            <button id="wm-ad-done-btn" class="btn btn-primary btn-wm-done">Remove Watermark ✨</button>
+            <button id="wm-ad-cancel-btn" class="btn btn-ghost">Keep Watermark</button>
+        </div>
+    </div>
+
+    <!-- ======================== RATING MODAL ======================== -->
+    <div id="rating-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+        <div class="modal-card" style="text-align:center">
+            <div class="rating-stars" aria-hidden="true">⭐⭐⭐⭐⭐</div>
+            <h2>Enjoying Crispy Status?</h2>
+            <p>You've made <span class="rating-count" id="rating-count">3</span> crispy videos!</p>
+            <div class="rating-buttons">
+                <button id="rating-love-btn" class="btn-love">❤️ Love it! Rate 5 stars</button>
+                <button id="rating-improve-btn" class="btn btn-ghost">🤔 Could be better</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================== FEEDBACK MODAL ======================== -->
+    <div id="feedback-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+        <div class="modal-card" style="text-align:center">
+            <div class="error-emoji" aria-hidden="true">💬</div>
+            <h2>We'd love your feedback</h2>
+            <p>What can we improve?</p>
+            <textarea id="feedback-text" rows="3" placeholder="Tell us what would make it better…"
+                style="width:100%;border-radius:12px;border:1px solid rgba(255,255,255,0.1);
+                background:rgba(255,255,255,0.05);color:#fff;padding:12px;font-family:'Nunito',sans-serif;
+                font-size:14px;resize:none;margin:12px 0"></textarea>
+            <button id="feedback-send-btn" class="btn btn-primary">Send Feedback 🙏</button>
+            <button id="feedback-skip-btn" class="btn btn-ghost">Skip</button>
+        </div>
+    </div>
+
     <!-- ======================== ERROR MODAL ======================== -->
     <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
          aria-labelledby="error-heading">
@@ -227,28 +552,23 @@
 <!-- Worker CORS patch -->
 <script>
 (function() {
-    var OriginalWorker = window.Worker;
-    window.Worker = function PatchedWorker(scriptURL, options) {
-        var url = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
-        if (url.startsWith('http') && !url.startsWith(location.origin)) {
-            console.log('[Crispy Worker Patch] Wrapping:', url);
-            var blob = new Blob(
-                ['importScripts(' + JSON.stringify(url) + ');'],
-                { type: 'text/javascript' }
-            );
-            return new OriginalWorker(URL.createObjectURL(blob), options);
+    var OW = window.Worker;
+    window.Worker = function(u, o) {
+        var s = u instanceof URL ? u.href : String(u);
+        if (s.startsWith('http') && !s.startsWith(location.origin)) {
+            var b = new Blob(['importScripts(' + JSON.stringify(s) + ');'], { type: 'text/javascript' });
+            return new OW(URL.createObjectURL(b), o);
         }
-        return new OriginalWorker(scriptURL, options);
+        return new OW(u, o);
     };
-    window.Worker.prototype = OriginalWorker.prototype;
-    console.log('[Crispy] ✅ Worker CORS patch installed');
+    window.Worker.prototype = OW.prototype;
 })();
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
 
 <script>
-    if (typeof FFmpegWASM === 'undefined') console.error('[Crispy] ❌ FFmpegWASM failed to load');
+    if (typeof FFmpegWASM === 'undefined') console.error('[Crispy] ❌ FFmpegWASM failed');
     else console.log('[Crispy] ✅ FFmpegWASM loaded');
 </script>
 
