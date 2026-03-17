@@ -17,16 +17,16 @@ var CONFIG = {
     maxFileSize: 500,
 
     quality: {
-        shortSide: 640,
-        audioBitrate: '80k',     // Lower to save bits for video
-        audioRate: 44100,
-        audioChannels: 2,
-        fps: 30,
-        preset: 'medium',
-        profile: 'main',
-        level: '3.1',
-        keyint: 60,
-    },
+    shortSide: 640,
+    audioBitrate: '80k',
+    audioRate: 44100,
+    audioChannels: 2,
+    fps: 30,
+    preset: 'fast',          // ← CHANGED from 'medium'
+    profile: 'main',
+    level: '3.1',
+    keyint: 60,
+},
 
     // ABR tiers — fixed bitrate by duration
     // Every video of same duration = same file size = same WhatsApp treatment
@@ -270,18 +270,19 @@ function getEncodingTier(duration) {
 function buildScaleFilter() {
     var target = CONFIG.quality.shortSide;
     if (state.isPortrait) {
-        if (state.videoWidth <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos';
-        return 'scale=' + target + ':-2:flags=lanczos';
+        if (state.videoWidth <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic';
+        return 'scale=' + target + ':-2:flags=bicubic';
     } else {
-        if (state.videoHeight <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos';
-        return 'scale=-2:' + target + ':flags=lanczos';
+        if (state.videoHeight <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic';
+        return 'scale=-2:' + target + ':flags=bicubic';
     }
+
 }
 
 function buildVideoFilters() {
-    var scale = buildScaleFilter();
-    // Very light sharpen — just enough edge definition
-    return scale + ',unsharp=3:3:0.3:3:3:0.1';
+    // No unsharp — at ABR bitrates the encoder can't represent the extra
+    // detail anyway, so sharpening just wastes CPU cycles
+    return buildScaleFilter();
 }
 
 function buildFFmpegCommand(dur, hasWM) {
