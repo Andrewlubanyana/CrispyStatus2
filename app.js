@@ -22,7 +22,7 @@ var CONFIG = {
     audioRate: 44100,
     audioChannels: 2,
     fps: 30,
-    preset: 'fast',          // ← CHANGED from 'medium'
+    preset: 'ultrafast',          // ← CHANGED from 'fast'
     profile: 'main',
     level: '3.1',
     keyint: 60,
@@ -269,14 +269,23 @@ function getEncodingTier(duration) {
 
 function buildScaleFilter() {
     var target = CONFIG.quality.shortSide;
-    if (state.isPortrait) {
-        if (state.videoWidth <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic';
-        return 'scale=' + target + ':-2:flags=bicubic';
-    } else {
-        if (state.videoHeight <= target) return 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic';
-        return 'scale=-2:' + target + ':flags=bicubic';
+    var shortSide = state.isPortrait ? state.videoWidth : state.videoHeight;
+
+    // Skip scaling entirely if input is already at or below target
+    // This saves significant processing time for smaller videos
+    if (shortSide <= target) {
+        log('Scale: SKIP — input ' + shortSide + 'p already ≤ ' + target + 'p');
+        return 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
     }
 
+    // Use fast_bilinear — fastest scaler, indistinguishable at 640p
+    if (state.isPortrait) {
+        log('Scale: portrait → ' + target + 'w (fast_bilinear)');
+        return 'scale=' + target + ':-2:flags=fast_bilinear';
+    } else {
+        log('Scale: landscape → ' + target + 'h (fast_bilinear)');
+        return 'scale=-2:' + target + ':flags=fast_bilinear';
+    }
 }
 
 function buildVideoFilters() {
