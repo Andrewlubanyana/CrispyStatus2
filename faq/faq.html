@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FAQ — Crispy Status</title>
+    <meta name="description" content="Frequently asked questions about Crispy Status. How it works, is it safe, supported formats, and more.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0B0B1A; color: #E2E8F0; font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.8; }
+        .nav { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.06); max-width: 900px; margin: 0 auto; }
+        .nav a { color: #FF6B35; text-decoration: none; font-weight: 700; font-size: 18px; }
+        .nav-links { display: flex; gap: 20px; }
+        .nav-links a { color: rgba(255,255,255,0.6); font-size: 14px; font-weight: 600; }
+        .container { max-width: 720px; margin: 0 auto; padding: 40px 24px 80px; }
+        h1 { font-size: 32px; color: #fff; margin-bottom: 32px; }
+        .faq-item { margin-bottom: 24px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 20px 24px; }
+        .faq-q { font-size: 17px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+        .faq-a { color: rgba(255,255,255,0.7); font-size: 15px; }
+        .faq-a a { color: #FF6B35; }
+        .cta-box { text-align: center; margin: 50px 0 0; padding: 40px; background: rgba(255,107,53,0.08); border: 1px solid rgba(255,107,53,0.15); border-radius: 16px; }
+        .cta-box h3 { color: #fff; margin-bottom: 8px; }
+        .cta-box p { color: rgba(255,255,255,0.6); margin-bottom: 20px; }
+        .cta-btn { display: inline-block; background: linear-gradient(135deg, #FF6B35, #FF3366); color: #fff; padding: 14px 32px; border-radius: 12px; text-decoration: none; font-weight: 700; }
+        footer { text-align: center; padding: 40px 24px; color: rgba(255,255,255,0.3); font-size: 13px; border-top: 1px solid rgba(255,255,255,0.06); max-width: 900px; margin: 0 auto; }
+        footer a { color: rgba(255,255,255,0.5); }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/">🔥 Crispy Status</a>
+        <div class="nav-links"><a href="/">App</a><a href="/blog/">Blog</a><a href="/about">About</a><a href="/faq">FAQ</a></div>
+    </nav>
+
+    <div class="container">
+        <h1>❓ Frequently Asked Questions</h1>
+
+        <div class="faq-item">
+            <div class="faq-q">Is Crispy Status free?</div>
+            <div class="faq-a">Yes! Crispy Status is completely free to use. We show ads to support the service. You can optionally watch a short ad to remove the watermark for 24 hours.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Is it safe? Are my videos uploaded to a server?</div>
+            <div class="faq-a">Your videos never leave your device. All processing happens locally in your browser using WebAssembly technology. We literally cannot see or access your videos. <a href="/privacy">Read our privacy policy</a>.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Why does WhatsApp make my videos blurry?</div>
+            <div class="faq-a">WhatsApp re-compresses every video posted to Status to save bandwidth. Higher quality videos get compressed more aggressively, resulting in blurry output. <a href="/blog/why-blurry">Read our detailed explanation</a>.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">What video formats are supported?</div>
+            <div class="faq-a">Crispy Status supports MP4, MOV, AVI, MKV, WebM, and 3GP files. For best results, use MP4 or MOV format. Maximum file size is 500MB.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">What's the maximum video length?</div>
+            <div class="faq-a">WhatsApp Status supports up to 30 seconds. If your video is longer, Crispy Status lets you trim it by selecting a 30-second window from your video.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">How long does processing take?</div>
+            <div class="faq-a">Typically 15-30 seconds for a 30-second video. Shorter videos process faster. The app shows a real-time progress bar and estimated time remaining.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Can I use Crispy Status offline?</div>
+            <div class="faq-a">After the first visit, the processing engine is cached on your device. Subsequent uses load much faster and basic functionality works with limited connectivity.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Can I remove the watermark?</div>
+            <div class="faq-a">Yes! Tap the watermark toggle on the home screen. You can watch a 5-second ad to remove the watermark for 24 hours.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Does it work on iPhone/iOS?</div>
+            <div class="faq-a">Yes! Crispy Status works in any modern browser — Chrome, Safari, Firefox, Edge — on both Android and iOS. You can also install it as a Progressive Web App (PWA) from your browser.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Why 640p and not 1080p?</div>
+            <div class="faq-a">WhatsApp Status displays videos at approximately 640p. If we output at 1080p, WhatsApp compresses it down to 640p anyway — destroying quality in the process. By outputting at 640p directly, WhatsApp barely touches the video. <a href="/blog/why-blurry">Learn more</a>.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">My video still looks blurry after using Crispy Status. What should I do?</div>
+            <div class="faq-a">Make sure you: (1) Post the downloaded file directly to WhatsApp Status — don't re-edit it, (2) Use Wi-Fi when posting, (3) Don't forward the Status to others — share the original file instead.</div>
+        </div>
+
+        <div class="faq-item">
+            <div class="faq-q">Is there an Android app?</div>
+            <div class="faq-a">Yes! Crispy Status is available on the Google Play Store. It's the same tool wrapped in a native app shell for convenience. Search "Crispy Status" on Google Play.</div>
+        </div>
+
+        <div class="cta-box">
+            <h3>🔥 Still Have Questions?</h3>
+            <p>Email us at <a href="mailto:hello@crispystatus.com" style="color:#FF6B35">hello@crispystatus.com</a></p>
+            <a href="/" class="cta-btn">Try Crispy Status →</a>
+        </div>
+    </div>
+
+    <footer>
+        <p>© 2026 Crispy Status · <a href="/about">About</a> · <a href="/privacy">Privacy</a> · <a href="/contact">Contact</a></p>
+    </footer>
+</body>
+</html>
