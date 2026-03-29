@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v20 — Lightning Remux & Rejection Fix
+   CRISPY STATUS — v21 — Desktop Bypass & Frame Lock Fix
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -158,8 +158,6 @@ function showQualityScore() { var qs = calculateQualityScore(); if (els.qualityS
 /* ======================== FILE HANDLING ======================== */
 function handleFileSelect(file) {
     log('File:', { name: file.name, size: formatBytes(file.size), type: file.type });
-    
-    // 🚀 FIX: Looser validation to prevent rejecting videos from Android gallery pickers
     var isVideoExt = file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp|hevc)$/i);
     var isVideoMime = file.type && file.type.startsWith('video/');
     
@@ -185,7 +183,6 @@ function handleFileSelect(file) {
     
     els.trimVideo.onerror = function() { 
         setButtonLoading(els.uploadBtn, false); 
-        // 🚀 FIX: Provide a better error message for HEVC files
         showError('Unsupported format', 'Your browser cannot play this codec (likely an HEVC iPhone video). Try a standard MP4.'); 
     };
 }
@@ -208,6 +205,13 @@ function getEncodingTier(duration) {
    HARDWARE ACCELERATED ENGINE
    ============================================================ */
 function isHardwareEncoderAvailable() {
+    // 🚀 FIX: PCs have strong CPUs. Force Desktop to use perfect FFmpeg WASM 
+    // to bypass all the messy Canvas drawing bugs.
+    if (!isMobile()) {
+        log('Desktop PC detected: Forcing perfect FFmpeg software engine.');
+        return false;
+    }
+
     if (typeof MediaRecorder === 'undefined') return false;
     if (typeof HTMLCanvasElement.prototype.captureStream !== 'function') return false;
     return !!getBestMimeType(true);
@@ -289,7 +293,10 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
 
         function cleanupHW() {
             clearTimeout(safetyTimeout);
-            cancelAnimationFrame(drawFrameRaf);
+            if (drawFrameRaf) {
+                if ('cancelVideoFrameCallback' in video) video.cancelVideoFrameCallback(drawFrameRaf);
+                else cancelAnimationFrame(drawFrameRaf);
+            }
             try { video.pause(); } catch (e) {}
             try { video.removeAttribute('src'); video.load(); } catch (e) {}
         }
@@ -379,7 +386,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
                     recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
                     
-                    // 🚀 NEW: THE LIGHTNING REMUX
                     recorder.onstop = async function() {
                         var rawBlob = new Blob(chunks, { type: mimeType.split(';')[0] });
                         cleanupHW();
@@ -392,8 +398,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                             var inputExt = mimeType.includes('webm') ? 'webm' : 'mp4';
                             await state.ffmpeg.writeFile('raw_hw.' + inputExt, fd);
                             
-                            // The magic command: -c copy prevents re-encoding (takes 1 second).
-                            // -movflags +faststart fixes the file for WhatsApp.
                             var cmd = ['-i', 'raw_hw.' + inputExt, '-c', 'copy'];
                             if (inputExt === 'mp4') {
                                 cmd.push('-movflags', '+faststart');
@@ -419,6 +423,7 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
 
                     var endTime = clipStart + clipDuration;
                     
+                    // 🚀 FIX: Lock canvas drawing to the actual video frames
                     function drawFrame() {
                         if (state.cancelled) { recorder.stop(); return; }
                         if (video.currentTime >= endTime || video.ended) {
@@ -431,10 +436,19 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                         
                         var pct = Math.min(99, Math.round(((video.currentTime - clipStart) / clipDuration) * 100));
                         setProgress(pct);
-                        drawFrameRaf = requestAnimationFrame(drawFrame);
+                        
+                        if ('requestVideoFrameCallback' in video) {
+                            drawFrameRaf = video.requestVideoFrameCallback(drawFrame);
+                        } else {
+                            drawFrameRaf = requestAnimationFrame(drawFrame);
+                        }
                     }
                     
-                    drawFrameRaf = requestAnimationFrame(drawFrame);
+                    if ('requestVideoFrameCallback' in video) {
+                        drawFrameRaf = video.requestVideoFrameCallback(drawFrame);
+                    } else {
+                        drawFrameRaf = requestAnimationFrame(drawFrame);
+                    }
 
                     safetyTimeout = setTimeout(function() {
                         if (recorder.state === 'recording') {
@@ -457,20 +471,28 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
 /* ======================== FFMPEG FALLBACK ======================== */
 async function loadFFmpeg() { if (state.ffmpegReady) return; if (typeof FFmpegWASM === 'undefined') throw new Error('SCRIPT_NOT_LOADED'); state.ffmpeg = new FFmpegWASM.FFmpeg(); state.ffmpeg.on('log', function(e) { console.log('[FFmpeg]', e.message); }); state.ffmpeg.on('progress', function(e) { var p = Math.min(Math.round(e.progress * 100), 100); if (p > 0) setProgress(p); }); var loaded = false; for (var i = 0; i < CONFIG.cdnUrls.length; i++) { try { updateStatus('Loading engine… ⬇️'); var core = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.js', 'text/javascript'); var wasm = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.wasm', 'application/wasm'); updateStatus('Starting engine… 🔧'); await state.ffmpeg.load({ coreURL: core, wasmURL: wasm }); loaded = true; break; } catch (e) { logError('CDN fail', e.message); } } if (!loaded) throw new Error('ENGINE_LOAD_FAILED'); state.ffmpegReady = true; }
 async function processWithFFmpegFallback(clipDuration) {
-    log('Using FFmpeg WASM fallback (slower)…');
+    log('Using FFmpeg WASM fallback (perfect quality)…');
     updateStatus('Loading engine… 🔧');
     if (!state.ffmpegReady) await loadFFmpeg();
     updateStatus('Reading video… 📖');
     var fd = new Uint8Array(await state.file.arrayBuffer());
     await state.ffmpeg.writeFile('input', fd);
     var tier = getEncodingTier(clipDuration);
-    updateStatus('Processing (slower mode)… 🍳');
-    var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration),
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        '-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
+    updateStatus('Processing perfect frames… 🍳');
+    
+    var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration)];
+    
+    if (state.hasWatermark) {
+        cmd.push('-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,drawtext=text=\'' + CONFIG.watermark.text + '\':fontcolor=white@0.9:fontsize=' + CONFIG.watermark.fontSize + ':x=' + CONFIG.watermark.padding + ':y=h-th-' + CONFIG.watermark.padding + ':box=1:boxcolor=black@0.4:boxborderw=10');
+    } else {
+        cmd.push('-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
+    }
+
+    cmd.push('-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
         '-preset', CONFIG.quality.preset, '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '128k',
-        '-movflags', '+faststart', 'output.mp4'];
+        '-movflags', '+faststart', 'output.mp4');
+
     var exit = await state.ffmpeg.exec(cmd);
     if (exit !== 0) throw new Error('FFMPEG_ERROR');
     var od = await state.ffmpeg.readFile('output.mp4');
@@ -518,12 +540,12 @@ async function startProcessing() {
                 log('⚠️ Hardware encoder failed: ' + hwErr.message + ' — falling back to FFmpeg');
             }
         } else {
-            log('Hardware encoder not available');
+            log('Hardware encoder bypassed (Desktop PC or unsupported)');
         }
 
         if (!state.outputBlob) {
-            log('Using FFmpeg WASM fallback…');
-            updateStatus('Processing (this may take a few minutes)… 🍳');
+            log('Using FFmpeg WASM…');
+            updateStatus('Processing perfect frames… 🍳');
             updatePiP(0, 'Processing…');
             if (state.cancelled) throw new Error('CANCELLED');
             var ffBlob = await processWithFFmpegFallback(clipDur);
@@ -602,8 +624,6 @@ function downloadVideo() {
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
-// 🚀 REVERTED: Because the Lightning Remux gives us a perfect file, 
-// the direct Share button works again for everyone. No more gallery routing!
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
     
@@ -680,15 +700,14 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v20                       ║');
-    log('║  Lightning Remux Engine                  ║');
+    log('║  CRISPY STATUS v21                       ║');
+    log('║  Frame-Locked Hybrid Engine              ║');
     log('╠══════════════════════════════════════════╣');
-    log('║ Primary: GPU Encode + FFmpeg Fast Remux  ║');
-    log('║ Fallback: FFmpeg WASM (software)         ║');
-    log('║ HW encoder: ' + (isHardwareEncoderAvailable() ? '✅ AVAILABLE' : '❌ not available'));
+    log('║ Primary (Mobile): Canvas + FFmpeg Remux  ║');
+    log('║ Fallback (PC): FFmpeg WASM Perfect Encode║');
+    log('║ HW encoder: ' + (isHardwareEncoderAvailable() ? '✅ AVAILABLE' : '❌ bypassed'));
     if (isHardwareEncoderAvailable()) {
         log('║ Mime type: ' + getBestMimeType());
-        log('║ Expected: 30s video → ~30-45 seconds     ║');
     }
     log('╚══════════════════════════════════════════╝');
     if (typeof WebAssembly === 'undefined') { alert('Browser not supported.'); return; }
