@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-
-  <h1>🔥 Crispy Status</h1>
-  
-  <nav style="margin-top: 12px;">
-    <a href="/" style="color: #FF6B35; margin-right: 16px; text-decoration: none; font-weight: 600;">App</a>
-    <a href="/blog/" style="color: rgba(255,255,255,0.6); margin-right: 16px; text-decoration: none; font-weight: 600;">Blog</a>
-    <a href="/about" style="color: rgba(255,255,255,0.6); margin-right: 16px; text-decoration: none; font-weight: 600;">About</a>
-    <a href="/faq" style="color: rgba(255,255,255,0.6); text-decoration: none; font-weight: 600;">FAQ</a>
-  </nav>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Crispy Status — Sharp WhatsApp Status. Every Time.</title>
@@ -33,7 +24,6 @@
 
     <link rel="stylesheet" href="styles.css">
 
-    <!-- Sprint 1 — New component styles -->
     <style>
         /* ============ WATERMARK TOGGLE ============ */
         .wm-setting {
@@ -272,6 +262,16 @@
 </head>
 <body>
 
+<header style="text-align: center; margin-top: 20px;">
+    <h1>🔥 Crispy Status</h1>
+    <nav style="margin-top: 12px;">
+        <a href="/" style="color: #FF6B35; margin-right: 16px; text-decoration: none; font-weight: 600;">App</a>
+        <a href="/blog/" style="color: rgba(255,255,255,0.6); margin-right: 16px; text-decoration: none; font-weight: 600;">Blog</a>
+        <a href="/about" style="color: rgba(255,255,255,0.6); margin-right: 16px; text-decoration: none; font-weight: 600;">About</a>
+        <a href="/faq" style="color: rgba(255,255,255,0.6); text-decoration: none; font-weight: 600;">FAQ</a>
+    </nav>
+</header>
+
 <div class="bg-orbs" aria-hidden="true">
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
@@ -296,7 +296,6 @@
 
 <div id="app">
 
-    <!-- ======================== HOME SCREEN ======================== -->
     <section id="home-screen" class="screen active">
         <div class="screen-content">
 
@@ -313,7 +312,6 @@
             </button>
             <input type="file" id="file-input" accept="video/*" hidden>
 
-            <!-- WATERMARK TOGGLE -->
             <div class="wm-setting" id="wm-setting">
                 <div class="wm-info">
                     <span class="wm-icon">🏷️</span>
@@ -339,7 +337,6 @@
         </div>
     </section>
 
-    <!-- ======================== TRIM SCREEN ======================== -->
     <section id="trim-screen" class="screen">
         <div class="screen-content">
 
@@ -381,7 +378,6 @@
         </div>
     </section>
 
-    <!-- ======================== PROCESSING SCREEN ======================== -->
     <section id="processing-screen" class="screen">
         <div class="screen-content centered">
 
@@ -400,7 +396,6 @@
                 <span id="progress-text" class="progress-pct">0 %</span>
             </div>
 
-            <!-- ETA DISPLAY -->
             <p class="processing-eta" id="processing-eta"></p>
 
             <p class="processing-fun-tip" id="fun-tip">💡 Crispy videos get more views!</p>
@@ -415,7 +410,6 @@
         </div>
     </section>
 
-    <!-- ======================== DONE SCREEN ======================== -->
     <section id="done-screen" class="screen">
         <div class="screen-content">
 
@@ -424,7 +418,6 @@
                 <h2>Video is Crispy!</h2>
             </div>
 
-            <!-- BEFORE/AFTER COMPARISON SLIDER -->
             <div class="compare-section" id="compare-section" style="display:none">
                 <p class="section-label">📸 See the difference</p>
                 <div class="compare-container" id="compare-container">
@@ -442,7 +435,6 @@
                 </div>
             </div>
 
-            <!-- QUALITY SCORE -->
             <div class="quality-score" id="quality-score" style="display:none">
                 <span class="quality-score-num" id="quality-score-num">--</span>
                 <div class="quality-score-label">
@@ -496,7 +488,6 @@
         </div>
     </section>
 
-    <!-- ======================== WATERMARK AD MODAL ======================== -->
     <div id="wm-ad-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
         <div class="modal-card wm-ad-body">
             <div class="error-emoji" aria-hidden="true">🏷️</div>
@@ -517,7 +508,6 @@
         </div>
     </div>
 
-    <!-- ======================== RATING MODAL ======================== -->
     <div id="rating-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
         <div class="modal-card" style="text-align:center">
             <div class="rating-stars" aria-hidden="true">⭐⭐⭐⭐⭐</div>
@@ -530,7 +520,6 @@
         </div>
     </div>
 
-    <!-- ======================== FEEDBACK MODAL ======================== -->
     <div id="feedback-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
         <div class="modal-card" style="text-align:center">
             <div class="error-emoji" aria-hidden="true">💬</div>
@@ -545,7 +534,6 @@
         </div>
     </div>
 
-    <!-- ======================== ERROR MODAL ======================== -->
     <div id="error-modal" class="modal-overlay hidden" role="alertdialog" aria-modal="true"
          aria-labelledby="error-heading">
         <div class="modal-card">
@@ -558,7 +546,6 @@
 
 </div>
 
-<!-- Worker CORS patch -->
 <script>
 (function() {
     var OW = window.Worker;
@@ -582,22 +569,23 @@
 </script>
 
 <script src="app.js"></script>
-  <footer style="
-  text-align: center;
-  padding: 40px 24px 20px;
-  color: rgba(255,255,255,0.3);
-  font-size: 13px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-  max-width: 900px;
-  margin: 60px auto 0;
+
+<footer style="
+    text-align: center;
+    padding: 40px 24px 20px;
+    color: rgba(255,255,255,0.3);
+    font-size: 13px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    max-width: 900px;
+    margin: 60px auto 0;
 ">
-  <p>
-    © 2026 Crispy Status · 
-    <a href="/about" style="color: rgba(255,255,255,0.5); text-decoration: none;">About</a> · 
-    <a href="/blog/" style="color: rgba(255,255,255,0.5); text-decoration: none;">Blog</a> · 
-    <a href="/privacy" style="color: rgba(255,255,255,0.5); text-decoration: none;">Privacy</a> · 
-    <a href="/faq" style="color: rgba(255,255,255,0.5); text-decoration: none;">FAQ</a>
-  </p>
+    <p>
+        © 2026 Crispy Status · 
+        <a href="/about" style="color: rgba(255,255,255,0.5); text-decoration: none;">About</a> · 
+        <a href="/blog/" style="color: rgba(255,255,255,0.5); text-decoration: none;">Blog</a> · 
+        <a href="/privacy" style="color: rgba(255,255,255,0.5); text-decoration: none;">Privacy</a> · 
+        <a href="/faq" style="color: rgba(255,255,255,0.5); text-decoration: none;">FAQ</a>
+    </p>
 </footer>
 </body>
 </html>
