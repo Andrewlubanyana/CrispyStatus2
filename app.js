@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v17 — Duration Metadata Patch
+   CRISPY STATUS — v18 — Android WebM Force & Duration Patch
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -198,19 +198,31 @@ function isHardwareEncoderAvailable() {
     return !!getBestMimeType(true);
 }
 
+// 🚀 FIX: Force Android to prefer WebM so duration patch can intercept it
 function getBestMimeType(checkOnly = false) {
-    var types = [
-        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
-        'video/mp4',
-        'video/webm; codecs=vp9,opus',
-        'video/webm; codecs=vp8,opus',
-        'video/webm; codecs=vp9',
-        'video/webm; codecs=vp8',
-        'video/webm',
-    ];
+    var isAndroid = /Android/i.test(navigator.userAgent);
+    var types = [];
+
+    if (isAndroid) {
+        types = [
+            'video/webm; codecs=vp9,opus',
+            'video/webm; codecs=vp8,opus',
+            'video/webm; codecs=vp9',
+            'video/webm; codecs=vp8',
+            'video/webm'
+        ];
+    } else {
+        types = [
+            'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
+            'video/mp4',
+            'video/webm; codecs=vp9,opus',
+            'video/webm'
+        ];
+    }
+
     for (var i = 0; i < types.length; i++) {
         if (MediaRecorder.isTypeSupported(types[i])) {
-            if (!checkOnly) log('MediaRecorder mime: ' + types[i]);
+            if (!checkOnly) log('MediaRecorder mime selected: ' + types[i]);
             return types[i];
         }
     }
@@ -291,8 +303,12 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
             var canvas = document.createElement('canvas');
             canvas.width = targetW;
             canvas.height = targetH;
+            
+            // alpha: false tells the browser the video has no transparency, 
+            // freeing up processing power for better image rendering
             var ctx = canvas.getContext('2d', { alpha: false });
             
+            // Force the best possible downscaling algorithm
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
 
@@ -352,9 +368,10 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     try {
                         recorder = new MediaRecorder(canvasStream, {
                             mimeType: mimeType,
-                            videoBitsPerSecond: tier.bps,
+                            videoBitsPerSecond: tier.bps, // Forcing the massive bitrate
                             audioBitsPerSecond: 128000,
                         });
+                        log('Encoder initialized with target bps: ' + tier.bps);
                     } catch (e) {
                         cleanupHW();
                         return reject(new Error('MEDIARECORDER_FAILED'));
@@ -364,7 +381,7 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
                     recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
                     
-                    // 🚀 CHANGED: Intercept the blob and inject the duration metadata
+                    // Intercept the blob and inject the duration metadata
                     recorder.onstop = function() {
                         var rawBlob = new Blob(chunks, { type: mimeType.split(';')[0] });
                         cleanupHW();
@@ -566,8 +583,6 @@ function downloadVideo() {
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
-// 🚀 RESTORED DIRECT SHARE MENU: The WebM duration is now fixed, 
-// so we don't need to force Android users to the gallery anymore!
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
     
@@ -644,7 +659,7 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v17                       ║');
+    log('║  CRISPY STATUS v18                       ║');
     log('║  Hardware Accelerated Engine             ║');
     log('╠══════════════════════════════════════════╣');
     log('║ Primary: Canvas + MediaRecorder (GPU)    ║');
