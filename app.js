@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v21 — Desktop Bypass & Frame Lock Fix
+   CRISPY STATUS — v22 — FFmpeg Crash Fix (Removed drawtext)
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -205,8 +205,6 @@ function getEncodingTier(duration) {
    HARDWARE ACCELERATED ENGINE
    ============================================================ */
 function isHardwareEncoderAvailable() {
-    // 🚀 FIX: PCs have strong CPUs. Force Desktop to use perfect FFmpeg WASM 
-    // to bypass all the messy Canvas drawing bugs.
     if (!isMobile()) {
         log('Desktop PC detected: Forcing perfect FFmpeg software engine.');
         return false;
@@ -423,7 +421,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
 
                     var endTime = clipStart + clipDuration;
                     
-                    // 🚀 FIX: Lock canvas drawing to the actual video frames
                     function drawFrame() {
                         if (state.cancelled) { recorder.stop(); return; }
                         if (video.currentTime >= endTime || video.ended) {
@@ -470,6 +467,8 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
 
 /* ======================== FFMPEG FALLBACK ======================== */
 async function loadFFmpeg() { if (state.ffmpegReady) return; if (typeof FFmpegWASM === 'undefined') throw new Error('SCRIPT_NOT_LOADED'); state.ffmpeg = new FFmpegWASM.FFmpeg(); state.ffmpeg.on('log', function(e) { console.log('[FFmpeg]', e.message); }); state.ffmpeg.on('progress', function(e) { var p = Math.min(Math.round(e.progress * 100), 100); if (p > 0) setProgress(p); }); var loaded = false; for (var i = 0; i < CONFIG.cdnUrls.length; i++) { try { updateStatus('Loading engine… ⬇️'); var core = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.js', 'text/javascript'); var wasm = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.wasm', 'application/wasm'); updateStatus('Starting engine… 🔧'); await state.ffmpeg.load({ coreURL: core, wasmURL: wasm }); loaded = true; break; } catch (e) { logError('CDN fail', e.message); } } if (!loaded) throw new Error('ENGINE_LOAD_FAILED'); state.ffmpegReady = true; }
+
+// 🚀 FIX: Removed the crash-inducing 'drawtext' command from the FFmpeg fallback
 async function processWithFFmpegFallback(clipDuration) {
     log('Using FFmpeg WASM fallback (perfect quality)…');
     updateStatus('Loading engine… 🔧');
@@ -480,18 +479,12 @@ async function processWithFFmpegFallback(clipDuration) {
     var tier = getEncodingTier(clipDuration);
     updateStatus('Processing perfect frames… 🍳');
     
-    var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration)];
-    
-    if (state.hasWatermark) {
-        cmd.push('-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,drawtext=text=\'' + CONFIG.watermark.text + '\':fontcolor=white@0.9:fontsize=' + CONFIG.watermark.fontSize + ':x=' + CONFIG.watermark.padding + ':y=h-th-' + CONFIG.watermark.padding + ':box=1:boxcolor=black@0.4:boxborderw=10');
-    } else {
-        cmd.push('-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
-    }
-
-    cmd.push('-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
+    var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration),
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
         '-preset', CONFIG.quality.preset, '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '128k',
-        '-movflags', '+faststart', 'output.mp4');
+        '-movflags', '+faststart', 'output.mp4'];
 
     var exit = await state.ffmpeg.exec(cmd);
     if (exit !== 0) throw new Error('FFMPEG_ERROR');
@@ -700,7 +693,7 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v21                       ║');
+    log('║  CRISPY STATUS v22                       ║');
     log('║  Frame-Locked Hybrid Engine              ║');
     log('╠══════════════════════════════════════════╣');
     log('║ Primary (Mobile): Canvas + FFmpeg Remux  ║');
