@@ -1,21 +1,11 @@
 /* ==========================================================
    CRISPY STATUS — v14 — Hardware Accelerated Engine
-   
-   THE BREAKTHROUGH:
-   Stop using FFmpeg WASM for encoding (3-5x slower than native).
-   Use the browser's built-in hardware video encoder instead.
-   
-   Canvas + MediaRecorder = hardware accelerated = 10-50x faster
-   FFmpeg WASM = software only fallback
-   
-   30s video: 10-15 min → 30-45 seconds
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
 var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
-
     quality: {
         shortSide: 640,
         audioBitrate: '80k',
@@ -27,7 +17,6 @@ var CONFIG = {
         level: '3.1',
         keyint: 60,
     },
-
     tiers: [
         { maxDur: 5,  vbr: '2200k', maxrate: '2800k', bufsize: '3500k', targetMB: 1.8, bps: 2200000 },
         { maxDur: 10, vbr: '1500k', maxrate: '2000k', bufsize: '2500k', targetMB: 2.2, bps: 1500000 },
@@ -36,7 +25,6 @@ var CONFIG = {
         { maxDur: 25, vbr: '800k',  maxrate: '1100k', bufsize: '1400k', targetMB: 3.2, bps: 800000 },
         { maxDur: 30, vbr: '700k',  maxrate: '1000k', bufsize: '1300k', targetMB: 3.5, bps: 700000 },
     ],
-
     watermark: {
         text: 'crispystatus.com',
         fontSize: 28,
@@ -47,12 +35,10 @@ var CONFIG = {
         bgPadV: 8,
         borderRadius: 6,
     },
-
     cdnUrls: [
         'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd',
         'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd',
     ],
-
     ratingPromptAfter: 3,
     wmFreeHours: 24,
     adCountdownSeconds: 5,
@@ -152,16 +138,13 @@ function captureAfterFrame() { var v = els.donePreview; if (!v || !v.videoWidth)
 function showComparison() { if (!state.beforeFrameURL || !state.afterFrameURL) return; if (els.compareSection) els.compareSection.style.display = 'block'; if (els.compareBefore) els.compareBefore.src = state.beforeFrameURL; if (els.compareAfter) els.compareAfter.src = state.afterFrameURL; updateComparePosition(50); }
 function updateComparePosition(pct) { pct = Math.max(5, Math.min(95, pct)); if (els.compareBefore) els.compareBefore.style.clipPath = 'inset(0 ' + (100 - pct) + '% 0 0)'; if (els.compareHandle) els.compareHandle.style.left = pct + '%'; }
 function setupComparisonDrag() { var c = els.compareContainer; if (!c) return; function gp(e) { var r = c.getBoundingClientRect(); var cx = e.touches ? e.touches[0].clientX : e.clientX; return ((cx - r.left) / r.width) * 100; } c.addEventListener('mousedown', function(e) { e.preventDefault(); state.compareDragging = true; updateComparePosition(gp(e)); }); document.addEventListener('mousemove', function(e) { if (state.compareDragging) { e.preventDefault(); updateComparePosition(gp(e)); } }); document.addEventListener('mouseup', function() { state.compareDragging = false; }); c.addEventListener('touchstart', function(e) { e.preventDefault(); state.compareDragging = true; updateComparePosition(gp(e)); }, { passive: false }); c.addEventListener('touchmove', function(e) { if (state.compareDragging) { e.preventDefault(); updateComparePosition(gp(e)); } }, { passive: false }); c.addEventListener('touchend', function() { state.compareDragging = false; }); }
-
 function updateETA(pct) { if (!els.processingEta || pct < 3) { if (els.processingEta) els.processingEta.textContent = ''; return; } var elapsed = (Date.now() - state.processStartTime) / 1000; var remaining = Math.max(0, (elapsed / (pct / 100)) - elapsed); state.etaSamples.push(remaining); if (state.etaSamples.length > 5) state.etaSamples.shift(); var avg = Math.ceil(state.etaSamples.reduce(function(a, b) { return a + b; }, 0) / state.etaSamples.length); if (avg <= 0 || pct >= 98) els.processingEta.textContent = 'Almost done…'; else if (avg < 60) els.processingEta.textContent = 'About ' + avg + ' second' + (avg > 1 ? 's' : '') + ' remaining'; else els.processingEta.textContent = 'About ' + Math.ceil(avg / 60) + ' min remaining'; if (state.pipActive && avg > 0 && pct < 98) state.pipStatusText = pct + '% — ' + avg + 's'; }
 function clearETA() { state.etaSamples = []; if (els.processingEta) els.processingEta.textContent = ''; }
-
 function isWatermarkFree() { var u = localStorage.getItem('crispy_wm_free_until'); return u && Date.now() < parseInt(u, 10); }
 function grantWatermarkFree() { localStorage.setItem('crispy_wm_free_until', String(Date.now() + CONFIG.wmFreeHours * 3600000)); state.hasWatermark = false; updateWatermarkUI(); }
 function updateWatermarkUI() { if (!els.wmToggleBtn) return; els.wmToggleBtn.textContent = state.hasWatermark ? 'ON' : 'OFF'; els.wmToggleBtn.className = 'wm-toggle ' + (state.hasWatermark ? 'on' : 'off'); }
 function showWatermarkAdModal() { if (!els.wmAdModal) return; els.wmAdModal.classList.remove('hidden'); var db = els.wmAdDoneBtn; if (db) { db.classList.remove('ready'); db.disabled = true; } if (els.wmCountdownFill) els.wmCountdownFill.style.width = '0%'; if (els.wmCountdownText) els.wmCountdownText.textContent = CONFIG.adCountdownSeconds + 's remaining'; var secs = CONFIG.adCountdownSeconds, elapsed = 0; if (state.wmAdTimer) clearInterval(state.wmAdTimer); state.wmAdTimer = setInterval(function() { elapsed++; if (els.wmCountdownFill) els.wmCountdownFill.style.width = (elapsed / secs * 100) + '%'; var rem = secs - elapsed; if (els.wmCountdownText) els.wmCountdownText.textContent = rem > 0 ? rem + 's remaining' : 'Ready!'; if (elapsed >= secs) { clearInterval(state.wmAdTimer); if (db) { db.classList.add('ready'); db.disabled = false; } } }, 1000); }
 function hideWatermarkAdModal() { if (els.wmAdModal) els.wmAdModal.classList.add('hidden'); if (state.wmAdTimer) { clearInterval(state.wmAdTimer); state.wmAdTimer = null; } }
-
 function getDownloadCount() { return parseInt(localStorage.getItem('crispy_downloads') || '0', 10); }
 function incrementDownloadCount() { var c = getDownloadCount() + 1; localStorage.setItem('crispy_downloads', String(c)); return c; }
 function shouldShowRatingPrompt(c) { return !localStorage.getItem('crispy_rated') && c === CONFIG.ratingPromptAfter; }
@@ -169,7 +152,6 @@ function showRatingPrompt(c) { if (els.ratingCount) els.ratingCount.textContent 
 function hideRatingPrompt() { if (els.ratingModal) els.ratingModal.classList.add('hidden'); }
 function showFeedbackModal() { hideRatingPrompt(); if (els.feedbackModal) els.feedbackModal.classList.remove('hidden'); }
 function hideFeedbackModal() { if (els.feedbackModal) els.feedbackModal.classList.add('hidden'); }
-
 function calculateQualityScore() { var s = 55, mb = state.outputSize / (1024 * 1024); if (mb <= 2) s += 30; else if (mb <= 3) s += 25; else if (mb <= 4) s += 20; else if (mb <= 5) s += 12; else s += 5; var r = state.outputSize / state.originalSize; if (r < 0.15) s += 15; else if (r < 0.3) s += 12; else if (r < 0.5) s += 8; else s += 4; s = Math.min(99, Math.max(70, s)); var d = s >= 92 ? 'WhatsApp won\'t re-compress 🎯' : s >= 82 ? 'Excellent for Status ✨' : s >= 72 ? 'Great quality 👍' : 'Good for Status'; return { score: s, desc: d }; }
 function showQualityScore() { var qs = calculateQualityScore(); if (els.qualityScore) els.qualityScore.style.display = 'flex'; if (els.qualityScoreNum) els.qualityScoreNum.textContent = qs.score + '/100'; if (els.qualityScoreDesc) els.qualityScoreDesc.textContent = qs.desc; }
 
@@ -208,38 +190,18 @@ function getEncodingTier(duration) {
 
 /* ============================================================
    HARDWARE ACCELERATED ENGINE
-   
-   Uses Canvas + MediaRecorder = phone's hardware encoder
-   10-50x faster than FFmpeg WASM software encoding
-   
-   Flow:
-   1. <video> element hardware-decodes the input
-   2. Canvas scales to 640p + draws watermark every frame
-   3. AudioContext captures audio from video
-   4. MediaRecorder hardware-encodes combined stream
-   5. Output: WebM or MP4 depending on browser support
    ============================================================ */
-
 function isHardwareEncoderAvailable() {
     if (typeof MediaRecorder === 'undefined') return false;
     if (typeof HTMLCanvasElement.prototype.captureStream !== 'function') return false;
-
-    // Check if any usable mime type is supported
-    var types = [
-        'video/webm; codecs=vp9,opus',
-        'video/webm; codecs=vp8,opus',
-        'video/webm; codecs=vp9',
-        'video/webm; codecs=vp8',
-        'video/webm',
-    ];
-    for (var i = 0; i < types.length; i++) {
-        if (MediaRecorder.isTypeSupported(types[i])) return true;
-    }
-    return false;
+    return !!getBestMimeType(true);
 }
 
-function getBestMimeType() {
+function getBestMimeType(checkOnly = false) {
+    // Prioritize MP4 for broad WhatsApp compatibility, specifically the iOS Safari profile
     var types = [
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
+        'video/mp4',
         'video/webm; codecs=vp9,opus',
         'video/webm; codecs=vp8,opus',
         'video/webm; codecs=vp9',
@@ -248,27 +210,24 @@ function getBestMimeType() {
     ];
     for (var i = 0; i < types.length; i++) {
         if (MediaRecorder.isTypeSupported(types[i])) {
-            log('MediaRecorder mime: ' + types[i]);
+            if (!checkOnly) log('MediaRecorder mime: ' + types[i]);
             return types[i];
         }
     }
-    return 'video/webm';
+    return checkOnly ? false : 'video/webm';
 }
 
 function drawWatermarkOnCanvas(ctx, w, h) {
     var wm = CONFIG.watermark;
     var fontSize = Math.max(14, Math.round(h * 0.04));
-
     ctx.font = '700 ' + fontSize + 'px sans-serif';
     var textWidth = ctx.measureText(wm.text).width;
     var padH = 10, padV = 6, radius = 4;
-
     var boxW = textWidth + padH * 2;
     var boxH = fontSize + padV * 2;
     var boxX = wm.padding;
     var boxY = h - wm.padding - boxH;
 
-    // Dark background pill
     ctx.fillStyle = 'rgba(0, 0, 0, ' + wm.bgOpacity + ')';
     ctx.beginPath();
     ctx.moveTo(boxX + radius, boxY);
@@ -283,7 +242,6 @@ function drawWatermarkOnCanvas(ctx, w, h) {
     ctx.closePath();
     ctx.fill();
 
-    // White text
     ctx.shadowColor = 'rgba(0,0,0,0.8)';
     ctx.shadowBlur = 3;
     ctx.shadowOffsetX = 1;
@@ -292,8 +250,6 @@ function drawWatermarkOnCanvas(ctx, w, h) {
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     ctx.fillText(wm.text, boxX + padH, boxY + boxH / 2 + 1);
-
-    // Reset shadow
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
@@ -302,26 +258,26 @@ function drawWatermarkOnCanvas(ctx, w, h) {
 
 function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
     return new Promise(function(resolve, reject) {
-        log('');
         log('╔══════════════════════════════════════════╗');
         log('║   HARDWARE ACCELERATED ENCODER           ║');
-        log('╠══════════════════════════════════════════╣');
-        log('║ Method: Canvas + MediaRecorder            ║');
-        log('║ Decoder: Browser hardware (GPU)           ║');
-        log('║ Encoder: Browser hardware (GPU)           ║');
-        log('║ Speed: Real-time (~' + clipDuration.toFixed(0) + 's for ' + clipDuration.toFixed(0) + 's video)');
         log('╚══════════════════════════════════════════╝');
 
-        // 1. Create video element for playback
         var video = document.createElement('video');
         video.playsInline = true;
         video.setAttribute('playsinline', '');
         video.preload = 'auto';
         video.src = state.objectUrl;
-
-        // Calculate target dimensions
+        
         var targetShort = CONFIG.quality.shortSide;
         var targetW, targetH;
+        var safetyTimeout, drawFrameRaf;
+
+        function cleanupHW() {
+            clearTimeout(safetyTimeout);
+            cancelAnimationFrame(drawFrameRaf);
+            try { video.pause(); } catch (e) {}
+            try { video.removeAttribute('src'); video.load(); } catch (e) {}
+        }
 
         video.onloadedmetadata = function() {
             if (state.isPortrait) {
@@ -332,204 +288,156 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                 targetW = Math.round((video.videoWidth * targetShort / video.videoHeight) / 2) * 2;
             }
 
-            log('Target: ' + targetW + '×' + targetH);
-
-            // 2. Create canvas
             var canvas = document.createElement('canvas');
             canvas.width = targetW;
             canvas.height = targetH;
             var ctx = canvas.getContext('2d');
-
-            // 3. Set up audio capture
-            var audioCtx = null;
-            var audioSource = null;
-            var audioDest = null;
-            var hasAudio = false;
-
-            try {
-                var AC = window.AudioContext || window.webkitAudioContext;
-                audioCtx = new AC();
-                audioSource = audioCtx.createMediaElementSource(video);
-                audioDest = audioCtx.createMediaStreamDestination();
-                audioSource.connect(audioDest);
-                // Don't connect to destination (speakers) — keep silent
-                hasAudio = true;
-                log('Audio capture ready ✅');
-            } catch (e) {
-                log('Audio capture failed: ' + e.message);
-            }
-
-            // 4. Create combined stream
             var canvasStream = canvas.captureStream(CONFIG.quality.fps);
 
-            if (hasAudio && audioDest.stream.getAudioTracks().length > 0) {
-                var audioTrack = audioDest.stream.getAudioTracks()[0];
-                canvasStream.addTrack(audioTrack);
-                log('Audio track added to stream ✅');
-            }
-
-            // 5. Set up MediaRecorder
-            var tier = getEncodingTier(clipDuration);
-            var mimeType = getBestMimeType();
-
-            var recorder;
-            try {
-                recorder = new MediaRecorder(canvasStream, {
-                    mimeType: mimeType,
-                    videoBitsPerSecond: tier.bps,
-                    audioBitsPerSecond: 80000,
-                });
-            } catch (e) {
-                log('MediaRecorder creation failed: ' + e.message);
-                cleanupHW();
-                reject(new Error('MEDIARECORDER_FAILED'));
-                return;
-            }
-
-            var chunks = [];
-            recorder.ondataavailable = function(e) {
-                if (e.data && e.data.size > 0) chunks.push(e.data);
-            };
-
-            recorder.onerror = function(e) {
-                log('MediaRecorder error: ' + (e.error ? e.error.message : 'unknown'));
-                cleanupHW();
-                reject(new Error('MEDIARECORDER_ERROR'));
-            };
-
-            recorder.onstop = function() {
-                log('Recording complete — ' + chunks.length + ' chunks');
-                var blob = new Blob(chunks, { type: mimeType.split(';')[0] });
-                log('Output blob: ' + formatBytes(blob.size) + ' (' + mimeType + ')');
-                cleanupHW();
-                resolve(blob);
-            };
-
-            function cleanupHW() {
-                try { video.pause(); } catch (e) {}
-                try { if (audioCtx) audioCtx.close(); } catch (e) {}
-                canvasStream.getTracks().forEach(function(t) { try { t.stop(); } catch (e) {} });
-            }
-
-            // 6. Seek to start time
             video.currentTime = clipStart;
-            video.volume = 0;
-            video.muted = false; // Unmuted so AudioContext can capture
+            video.volume = 1; 
+            video.muted = false; // Intentionally unmuted to capture audio
 
             video.onseeked = function() {
                 video.onseeked = null;
-                log('Seeked to ' + clipStart.toFixed(1) + 's — starting recording');
-
-                // 7. Start recording
-                recorder.start(500); // Collect data every 500ms
+                
+                // CRITICAL: We must wait for play to resolve before capturing the stream,
+                // otherwise iOS and Chrome will return empty audio tracks.
                 video.play().then(function() {
-                    log('Playback started');
-                }).catch(function(e) {
-                    log('Play failed: ' + e.message);
-                    // Try with muted
-                    video.muted = true;
-                    video.play().catch(function() {
+                    log('Playback started successfully.');
+                    
+                    var audioTrack = null;
+                    var hasAudio = false;
+
+                    // 1. Try native captureStream first (Best Quality / Sync)
+                    try {
+                        var vs = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
+                        if (vs && vs.getAudioTracks().length > 0) {
+                            audioTrack = vs.getAudioTracks()[0];
+                            hasAudio = true;
+                            log('Audio track captured via stream ✅');
+                        }
+                    } catch(e) {}
+
+                    // 2. Fallback to AudioContext if native fails (Common on older Safari)
+                    if (!hasAudio) {
+                        try {
+                            var AC = window.AudioContext || window.webkitAudioContext;
+                            if (AC) {
+                                var audioCtx = new AC();
+                                var audioSource = audioCtx.createMediaElementSource(video);
+                                var audioDest = audioCtx.createMediaStreamDestination();
+                                
+                                // Route to destination with 0 gain to appease iOS silence requirements
+                                var gainNode = audioCtx.createGain();
+                                gainNode.gain.value = 0;
+                                
+                                audioSource.connect(audioDest);
+                                audioSource.connect(gainNode);
+                                gainNode.connect(audioCtx.destination);
+                                
+                                if (audioDest.stream.getAudioTracks().length > 0) {
+                                    audioTrack = audioDest.stream.getAudioTracks()[0];
+                                    hasAudio = true;
+                                    log('Audio captured via AudioContext fallback ✅');
+                                }
+                            }
+                        } catch (e) { log('Audio fallback failed: ' + e.message); }
+                    }
+
+                    if (hasAudio && audioTrack) {
+                        canvasStream.addTrack(audioTrack);
+                    }
+
+                    var tier = getEncodingTier(clipDuration);
+                    var mimeType = getBestMimeType();
+                    var recorder;
+
+                    try {
+                        recorder = new MediaRecorder(canvasStream, {
+                            mimeType: mimeType,
+                            videoBitsPerSecond: tier.bps,
+                            audioBitsPerSecond: 80000,
+                        });
+                    } catch (e) {
                         cleanupHW();
-                        reject(new Error('PLAYBACK_FAILED'));
-                    });
+                        return reject(new Error('MEDIARECORDER_FAILED'));
+                    }
+
+                    var chunks = [];
+                    recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
+                    recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
+                    recorder.onstop = function() {
+                        var blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+                        cleanupHW();
+                        resolve(blob);
+                    };
+
+                    recorder.start(500);
+
+                    var endTime = clipStart + clipDuration;
+                    
+                    function drawFrame() {
+                        if (state.cancelled) { recorder.stop(); return; }
+                        if (video.currentTime >= endTime || video.ended) {
+                            try { recorder.stop(); } catch (e) {}
+                            return;
+                        }
+                        
+                        ctx.drawImage(video, 0, 0, targetW, targetH);
+                        if (useWatermark) drawWatermarkOnCanvas(ctx, targetW, targetH);
+                        
+                        var pct = Math.min(99, Math.round(((video.currentTime - clipStart) / clipDuration) * 100));
+                        setProgress(pct);
+                        drawFrameRaf = requestAnimationFrame(drawFrame);
+                    }
+                    
+                    drawFrameRaf = requestAnimationFrame(drawFrame);
+
+                    safetyTimeout = setTimeout(function() {
+                        if (recorder.state === 'recording') {
+                            log('Safety timeout — force stopping');
+                            try { recorder.stop(); } catch (e) {}
+                        }
+                    }, (clipDuration + 5) * 1000);
+
+                }).catch(function(e) {
+                    // IF THE BROWSER BLOCKS AUTOPLAY (e.g. Safari user-gesture policy),
+                    // We catch it immediately and trigger the FFmpeg fallback.
+                    log('Playback blocked by browser (autoplay policy). Catching and falling back.');
+                    cleanupHW();
+                    reject(new Error('AUTOPLAY_BLOCKED'));
                 });
-
-                // 8. Draw frames
-                var endTime = clipStart + clipDuration;
-                var frameCount = 0;
-
-                function drawFrame() {
-                    if (state.cancelled) {
-                        recorder.stop();
-                        return;
-                    }
-
-                    if (video.currentTime >= endTime || video.ended || video.paused) {
-                        log('Recording finished — ' + frameCount + ' frames drawn');
-                        try { recorder.stop(); } catch (e) {}
-                        return;
-                    }
-
-                    // Draw scaled video frame
-                    ctx.drawImage(video, 0, 0, targetW, targetH);
-
-                    // Draw watermark
-                    if (useWatermark) {
-                        drawWatermarkOnCanvas(ctx, targetW, targetH);
-                    }
-
-                    frameCount++;
-
-                    // Update progress
-                    var pct = Math.min(99, Math.round(((video.currentTime - clipStart) / clipDuration) * 100));
-                    setProgress(pct);
-
-                    requestAnimationFrame(drawFrame);
-                }
-
-                requestAnimationFrame(drawFrame);
-            };
-
-            // Handle video ending naturally
-            video.onended = function() {
-                if (recorder.state === 'recording') {
-                    log('Video ended naturally');
-                    try { recorder.stop(); } catch (e) {}
-                }
-            };
-
-            // Safety timeout — if video doesn't end, force stop
-            var safetyTimeout = setTimeout(function() {
-                if (recorder.state === 'recording') {
-                    log('Safety timeout — force stopping');
-                    try { recorder.stop(); } catch (e) {}
-                }
-            }, (clipDuration + 5) * 1000);
-
-            var origOnStop = recorder.onstop;
-            recorder.onstop = function() {
-                clearTimeout(safetyTimeout);
-                origOnStop();
             };
         };
 
-        video.onerror = function() {
-            reject(new Error('VIDEO_LOAD_FAILED'));
-        };
+        video.onerror = function() { reject(new Error('VIDEO_LOAD_FAILED')); };
     });
 }
 
 /* ======================== FFMPEG FALLBACK ======================== */
 async function loadFFmpeg() { if (state.ffmpegReady) return; if (typeof FFmpegWASM === 'undefined') throw new Error('SCRIPT_NOT_LOADED'); state.ffmpeg = new FFmpegWASM.FFmpeg(); state.ffmpeg.on('log', function(e) { console.log('[FFmpeg]', e.message); }); state.ffmpeg.on('progress', function(e) { var p = Math.min(Math.round(e.progress * 100), 100); if (p > 0) setProgress(p); }); var loaded = false; for (var i = 0; i < CONFIG.cdnUrls.length; i++) { try { updateStatus('Loading engine… ⬇️'); var core = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.js', 'text/javascript'); var wasm = await toBlobURL(CONFIG.cdnUrls[i] + '/ffmpeg-core.wasm', 'application/wasm'); updateStatus('Starting engine… 🔧'); await state.ffmpeg.load({ coreURL: core, wasmURL: wasm }); loaded = true; break; } catch (e) { logError('CDN fail', e.message); } } if (!loaded) throw new Error('ENGINE_LOAD_FAILED'); state.ffmpegReady = true; }
-
 async function processWithFFmpegFallback(clipDuration) {
     log('Using FFmpeg WASM fallback (slower)…');
     updateStatus('Loading engine… 🔧');
     if (!state.ffmpegReady) await loadFFmpeg();
-
     updateStatus('Reading video… 📖');
     var fd = new Uint8Array(await state.file.arrayBuffer());
     await state.ffmpeg.writeFile('input', fd);
-
     var tier = getEncodingTier(clipDuration);
     updateStatus('Processing (slower mode)… 🍳');
-
     var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration),
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
         '-preset', 'ultrafast', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '80k',
         '-movflags', '+faststart', 'output.mp4'];
-
     var exit = await state.ffmpeg.exec(cmd);
     if (exit !== 0) throw new Error('FFMPEG_ERROR');
-
     var od = await state.ffmpeg.readFile('output.mp4');
     if (!od || od.byteLength < 1000) throw new Error('OUTPUT_EMPTY');
-
     try { await state.ffmpeg.deleteFile('input'); } catch (e) {}
     try { await state.ffmpeg.deleteFile('output.mp4'); } catch (e) {}
-
     return new Blob([od.buffer], { type: 'video/mp4' });
 }
 
@@ -540,30 +448,23 @@ async function startProcessing() {
     state.processStartTime = Date.now(); state.etaSamples = [];
     state.hasWatermark = !isWatermarkFree();
     state.hwEncoderUsed = false;
-
     showScreen('processing-screen'); setProgress(0); clearETA(); startFunMessages();
     await acquireWakeLock(); startSilentAudio();
     var pip = false;
     if (isMobile() && isPiPSupported()) try { pip = await startPiP(); } catch (e) {}
     if (state.notifPermission === 'default') try { await askNotificationPermission(); } catch (e) {}
     showBgNotice();
-
     var clipDur = Math.min(CONFIG.maxDuration, state.duration);
-
     try {
-        // ========== TRY HARDWARE ENCODER FIRST ==========
         if (isHardwareEncoderAvailable()) {
             log('🚀 Hardware encoder available — using fast path');
             updateStatus('Processing with GPU acceleration… ⚡');
             updatePiP(0, 'GPU encoding…');
-
             try {
                 var hwBlob = await processWithHardwareEncoder(
                     state.trimStart, clipDur, state.hasWatermark
                 );
-
                 if (state.cancelled) throw new Error('CANCELLED');
-
                 if (hwBlob && hwBlob.size > 1000) {
                     state.outputBlob = hwBlob;
                     state.outputUrl = URL.createObjectURL(hwBlob);
@@ -576,34 +477,26 @@ async function startProcessing() {
             } catch (hwErr) {
                 if (hwErr.message === 'CANCELLED') throw hwErr;
                 log('⚠️ Hardware encoder failed: ' + hwErr.message + ' — falling back to FFmpeg');
-                // Fall through to FFmpeg
             }
         } else {
             log('Hardware encoder not available');
         }
 
-        // ========== FFMPEG FALLBACK ==========
         if (!state.outputBlob) {
             log('Using FFmpeg WASM fallback…');
             updateStatus('Processing (this may take a few minutes)… 🍳');
             updatePiP(0, 'Processing…');
-
             if (state.cancelled) throw new Error('CANCELLED');
-
             var ffBlob = await processWithFFmpegFallback(clipDur);
-
             if (state.cancelled) throw new Error('CANCELLED');
-
             state.outputBlob = ffBlob;
             state.outputUrl = URL.createObjectURL(ffBlob);
             state.outputSize = ffBlob.size;
         }
 
-        // ========== DONE ==========
         var sizeMB = state.outputSize / (1024 * 1024);
         var elapsed = ((Date.now() - state.processStartTime) / 1000).toFixed(1);
         var tier = getEncodingTier(clipDur);
-
         log('');
         log('╔══════════════════════════════════════╗');
         log('║              RESULTS                 ║');
@@ -613,12 +506,10 @@ async function startProcessing() {
         log('║ Engine: ' + (state.hwEncoderUsed ? '🚀 HARDWARE' : '🐌 FFmpeg WASM'));
         log('║ Watermark: ' + (state.hasWatermark ? 'yes' : 'no'));
         log('╚══════════════════════════════════════╝');
-
         setProgress(100);
         await releaseWakeLock(); stopSilentAudio(); showPiPDone();
         sendNotification('🔥 Video is crispy!', 'Done in ' + elapsed + 's.');
         haptic('success'); showDone();
-
     } catch (err) {
         stopFunMessages(); clearETA(); await releaseWakeLock(); stopSilentAudio(); closePiP();
         if (err.message === 'CANCELLED') { showToast('Cancelled', 'info'); showScreen('home-screen'); return; }
@@ -635,7 +526,6 @@ async function startProcessing() {
         showError(t, m); showScreen('home-screen');
     } finally { state.processing = false; stopFunMessages(); clearETA(); hideBgNotice(); }
 }
-
 function cancelProcessing() { state.cancelled = true; releaseWakeLock(); stopSilentAudio(); closePiP(); showToast('Cancelling…', 'info', 2000); }
 function showBgNotice() { if (els.bgNotice) els.bgNotice.classList.remove('hidden'); }
 function hideBgNotice() { if (els.bgNotice) els.bgNotice.classList.add('hidden'); }
@@ -663,7 +553,6 @@ function showDone() {
 /* ======================== DOWNLOAD & SHARE ======================== */
 function downloadVideo() {
     if (!state.outputUrl) return; haptic('medium');
-    // Determine file extension based on output type
     var ext = (state.outputBlob && state.outputBlob.type && state.outputBlob.type.includes('webm')) ? 'webm' : 'mp4';
     var a = document.createElement('a'); a.href = state.outputUrl; a.download = 'crispy-status.' + ext;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -713,19 +602,16 @@ function bindEvents() {
     if (els.newVideoBtn) els.newVideoBtn.addEventListener('click', function() { haptic('light'); cleanup(); showScreen('home-screen'); });
     if (els.errorCloseBtn) els.errorCloseBtn.addEventListener('click', function() { haptic('light'); hideError(); showScreen('home-screen'); });
     if (els.errorModal) els.errorModal.addEventListener('click', function(e) { if (e.target === els.errorModal) hideError(); });
-
     if (els.wmToggleBtn) els.wmToggleBtn.addEventListener('click', function() { haptic('light'); if (state.hasWatermark) showWatermarkAdModal(); else { state.hasWatermark = true; localStorage.removeItem('crispy_wm_free_until'); updateWatermarkUI(); showToast('Watermark enabled 🏷️', 'info', 2000); } });
     if (els.wmAdDoneBtn) els.wmAdDoneBtn.addEventListener('click', function() { haptic('success'); grantWatermarkFree(); hideWatermarkAdModal(); showToast('Watermark removed for 24h! ✨', 'success'); });
     if (els.wmAdCancelBtn) els.wmAdCancelBtn.addEventListener('click', function() { haptic('light'); hideWatermarkAdModal(); });
     if (els.wmAdModal) els.wmAdModal.addEventListener('click', function(e) { if (e.target === els.wmAdModal) hideWatermarkAdModal(); });
-
     if (els.ratingLoveBtn) els.ratingLoveBtn.addEventListener('click', function() { haptic('success'); localStorage.setItem('crispy_rated', 'love'); hideRatingPrompt(); showToast('Thank you! ❤️🔥', 'success', 4000); });
     if (els.ratingImproveBtn) els.ratingImproveBtn.addEventListener('click', function() { haptic('light'); localStorage.setItem('crispy_rated', 'improve'); showFeedbackModal(); });
     if (els.ratingModal) els.ratingModal.addEventListener('click', function(e) { if (e.target === els.ratingModal) { localStorage.setItem('crispy_rated', 'dismissed'); hideRatingPrompt(); } });
     if (els.feedbackSendBtn) els.feedbackSendBtn.addEventListener('click', function() { haptic('success'); hideFeedbackModal(); showToast('Thanks! 🙏', 'success'); });
     if (els.feedbackSkipBtn) els.feedbackSkipBtn.addEventListener('click', function() { haptic('light'); hideFeedbackModal(); });
     if (els.feedbackModal) els.feedbackModal.addEventListener('click', function(e) { if (e.target === els.feedbackModal) hideFeedbackModal(); });
-
     document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { if (els.errorModal && !els.errorModal.classList.contains('hidden')) hideError(); if (els.wmAdModal && !els.wmAdModal.classList.contains('hidden')) hideWatermarkAdModal(); if (els.ratingModal && !els.ratingModal.classList.contains('hidden')) { localStorage.setItem('crispy_rated', 'dismissed'); hideRatingPrompt(); } if (els.feedbackModal && !els.feedbackModal.classList.contains('hidden')) hideFeedbackModal(); } });
     window.addEventListener('resize', function() { if (els.confettiCanvas) { els.confettiCanvas.width = window.innerWidth; els.confettiCanvas.height = window.innerHeight; } });
     setupComparisonDrag();
@@ -733,7 +619,6 @@ function bindEvents() {
 
 function registerSW() { if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function() {}); }
 function preloadFFmpeg() {
-    // Only preload FFmpeg if hardware encoder isn't available
     if (!isHardwareEncoderAvailable()) {
         setTimeout(function() { if (!state.ffmpegReady) { log('Preloading FFmpeg (no hw encoder)…'); loadFFmpeg().then(function() { log('Preload ✅'); }).catch(function(e) { log('Preload fail: ' + e.message); }); } }, 3000);
     } else {
@@ -756,7 +641,6 @@ function init() {
         log('║ Expected: 30s video → ~30-45 seconds     ║');
     }
     log('╚══════════════════════════════════════════╝');
-
     if (typeof WebAssembly === 'undefined') { alert('Browser not supported.'); return; }
     initEls();
     try { bindEvents(); } catch (e) { logError('bindEvents', e); return; }
