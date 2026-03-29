@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v14 — Hardware Accelerated Engine
+   CRISPY STATUS — v15 — Quality Overhaul
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -7,23 +7,25 @@ var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
     quality: {
-        shortSide: 640,
-        audioBitrate: '80k',
+        shortSide: 720, // 🚀 CHANGED: Match WhatsApp's native HD status resolution
+        audioBitrate: '128k',
         audioRate: 44100,
         audioChannels: 2,
         fps: 30,
-        preset: 'ultrafast',
+        preset: 'superfast',
         profile: 'main',
         level: '3.1',
-        keyint: 60,
+        keyint: 30, // Force more keyframes
     },
     tiers: [
-        { maxDur: 5,  vbr: '2200k', maxrate: '2800k', bufsize: '3500k', targetMB: 1.8, bps: 2200000 },
-        { maxDur: 10, vbr: '1500k', maxrate: '2000k', bufsize: '2500k', targetMB: 2.2, bps: 1500000 },
-        { maxDur: 15, vbr: '1100k', maxrate: '1500k', bufsize: '2000k', targetMB: 2.8, bps: 1100000 },
-        { maxDur: 20, vbr: '900k',  maxrate: '1200k', bufsize: '1600k', targetMB: 3.0, bps: 900000 },
-        { maxDur: 25, vbr: '800k',  maxrate: '1100k', bufsize: '1400k', targetMB: 3.2, bps: 800000 },
-        { maxDur: 30, vbr: '700k',  maxrate: '1000k', bufsize: '1300k', targetMB: 3.5, bps: 700000 },
+        // 🚀 CHANGED: Massively increased bitrates. MediaRecorder needs higher bitrates 
+        // to maintain quality. We want to feed WhatsApp a pristine source file.
+        { maxDur: 5,  vbr: '4000k', maxrate: '5000k', bufsize: '6000k', targetMB: 2.5, bps: 4000000 },
+        { maxDur: 10, vbr: '3500k', maxrate: '4500k', bufsize: '5000k', targetMB: 4.3, bps: 3500000 },
+        { maxDur: 15, vbr: '3000k', maxrate: '4000k', bufsize: '4500k', targetMB: 5.6, bps: 3000000 },
+        { maxDur: 20, vbr: '2500k', maxrate: '3500k', bufsize: '4000k', targetMB: 6.2, bps: 2500000 },
+        { maxDur: 25, vbr: '2500k', maxrate: '3500k', bufsize: '4000k', targetMB: 7.8, bps: 2500000 },
+        { maxDur: 30, vbr: '2500k', maxrate: '3500k', bufsize: '4000k', targetMB: 9.3, bps: 2500000 },
     ],
     watermark: {
         text: 'crispystatus.com',
@@ -198,7 +200,6 @@ function isHardwareEncoderAvailable() {
 }
 
 function getBestMimeType(checkOnly = false) {
-    // Prioritize MP4 for broad WhatsApp compatibility, specifically the iOS Safari profile
     var types = [
         'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
         'video/mp4',
@@ -292,24 +293,26 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
             canvas.width = targetW;
             canvas.height = targetH;
             var ctx = canvas.getContext('2d');
+            
+            // 🚀 CHANGED: Force high-quality scaling on the canvas
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+
             var canvasStream = canvas.captureStream(CONFIG.quality.fps);
 
             video.currentTime = clipStart;
             video.volume = 1; 
-            video.muted = false; // Intentionally unmuted to capture audio
+            video.muted = false;
 
             video.onseeked = function() {
                 video.onseeked = null;
                 
-                // CRITICAL: We must wait for play to resolve before capturing the stream,
-                // otherwise iOS and Chrome will return empty audio tracks.
                 video.play().then(function() {
                     log('Playback started successfully.');
                     
                     var audioTrack = null;
                     var hasAudio = false;
 
-                    // 1. Try native captureStream first (Best Quality / Sync)
                     try {
                         var vs = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
                         if (vs && vs.getAudioTracks().length > 0) {
@@ -319,7 +322,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                         }
                     } catch(e) {}
 
-                    // 2. Fallback to AudioContext if native fails (Common on older Safari)
                     if (!hasAudio) {
                         try {
                             var AC = window.AudioContext || window.webkitAudioContext;
@@ -327,8 +329,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                                 var audioCtx = new AC();
                                 var audioSource = audioCtx.createMediaElementSource(video);
                                 var audioDest = audioCtx.createMediaStreamDestination();
-                                
-                                // Route to destination with 0 gain to appease iOS silence requirements
                                 var gainNode = audioCtx.createGain();
                                 gainNode.gain.value = 0;
                                 
@@ -357,7 +357,7 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                         recorder = new MediaRecorder(canvasStream, {
                             mimeType: mimeType,
                             videoBitsPerSecond: tier.bps,
-                            audioBitsPerSecond: 80000,
+                            audioBitsPerSecond: 128000,
                         });
                     } catch (e) {
                         cleanupHW();
@@ -402,8 +402,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     }, (clipDuration + 5) * 1000);
 
                 }).catch(function(e) {
-                    // IF THE BROWSER BLOCKS AUTOPLAY (e.g. Safari user-gesture policy),
-                    // We catch it immediately and trigger the FFmpeg fallback.
                     log('Playback blocked by browser (autoplay policy). Catching and falling back.');
                     cleanupHW();
                     reject(new Error('AUTOPLAY_BLOCKED'));
@@ -429,8 +427,8 @@ async function processWithFFmpegFallback(clipDuration) {
     var cmd = ['-y', '-ss', String(state.trimStart), '-i', 'input', '-t', String(clipDuration),
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-c:v', 'libx264', '-b:v', tier.vbr, '-maxrate', tier.maxrate, '-bufsize', tier.bufsize,
-        '-preset', 'ultrafast', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '80k',
+        '-preset', CONFIG.quality.preset, '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k',
         '-movflags', '+faststart', 'output.mp4'];
     var exit = await state.ffmpeg.exec(cmd);
     if (exit !== 0) throw new Error('FFMPEG_ERROR');
@@ -630,7 +628,7 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v14                       ║');
+    log('║  CRISPY STATUS v15                       ║');
     log('║  Hardware Accelerated Engine             ║');
     log('╠══════════════════════════════════════════╣');
     log('║ Primary: Canvas + MediaRecorder (GPU)    ║');
