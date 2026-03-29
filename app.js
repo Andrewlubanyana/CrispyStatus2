@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v18 — Android WebM Force & Duration Patch
+   CRISPY STATUS — v19 — Stable MP4 Pipeline & Gallery Workaround
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -198,27 +198,17 @@ function isHardwareEncoderAvailable() {
     return !!getBestMimeType(true);
 }
 
-// 🚀 FIX: Force Android to prefer WebM so duration patch can intercept it
+// 🚀 REVERTED: MP4 is back as the absolute priority for all platforms 
 function getBestMimeType(checkOnly = false) {
-    var isAndroid = /Android/i.test(navigator.userAgent);
-    var types = [];
-
-    if (isAndroid) {
-        types = [
-            'video/webm; codecs=vp9,opus',
-            'video/webm; codecs=vp8,opus',
-            'video/webm; codecs=vp9',
-            'video/webm; codecs=vp8',
-            'video/webm'
-        ];
-    } else {
-        types = [
-            'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
-            'video/mp4',
-            'video/webm; codecs=vp9,opus',
-            'video/webm'
-        ];
-    }
+    var types = [
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
+        'video/mp4',
+        'video/webm; codecs=vp9,opus',
+        'video/webm; codecs=vp8,opus',
+        'video/webm; codecs=vp9',
+        'video/webm; codecs=vp8',
+        'video/webm'
+    ];
 
     for (var i = 0; i < types.length; i++) {
         if (MediaRecorder.isTypeSupported(types[i])) {
@@ -381,19 +371,11 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
                     recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
                     
-                    // Intercept the blob and inject the duration metadata
+                    // 🚀 REVERTED: Removed the WebM patcher. Simple resolve for MP4.
                     recorder.onstop = function() {
                         var rawBlob = new Blob(chunks, { type: mimeType.split(';')[0] });
                         cleanupHW();
-
-                        if (mimeType.includes('webm') && typeof ysFixWebmDuration !== 'undefined') {
-                            log('Injecting precise duration metadata into WebM... (' + clipDuration + 's)');
-                            ysFixWebmDuration(rawBlob, clipDuration * 1000, function(fixedBlob) {
-                                resolve(fixedBlob);
-                            });
-                        } else {
-                            resolve(rawBlob);
-                        }
+                        resolve(rawBlob);
                     };
 
                     recorder.start(500);
@@ -571,21 +553,34 @@ function showDone() {
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
-function downloadVideo() {
+function downloadVideo(fromShareBtn) {
     if (!state.outputUrl) return; haptic('medium');
     var ext = (state.outputBlob && state.outputBlob.type && state.outputBlob.type.includes('webm')) ? 'webm' : 'mp4';
     var a = document.createElement('a'); a.href = state.outputUrl; a.download = 'crispy-status.' + ext;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     
-    showToast('Video saved! Post it to Status now 🔥', 'success');
+    if (fromShareBtn === true) {
+        showToast('Saved to Gallery! Open WhatsApp to post 📸', 'info', 4500);
+    } else {
+        showToast('Video saved! Post it to Status now 🔥', 'success');
+    }
 
     var c = incrementDownloadCount(); if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500);
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
+// 🚀 REVERTED: The Gallery Workaround is back for Android users to fix the 3-second cut
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
     
+    var isAndroid = /Android/i.test(navigator.userAgent);
+
+    if (isAndroid && state.hwEncoderUsed) {
+        log('Android + HW Encoder: Bypassing Share Intent to prevent 3-second bug.');
+        downloadVideo(true); 
+        return;
+    }
+
     if (navigator.canShare) {
         var ext = state.outputBlob.type.includes('webm') ? 'webm' : 'mp4';
         var f = new File([state.outputBlob], 'crispy-status.' + ext, { type: state.outputBlob.type });
@@ -659,7 +654,7 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v18                       ║');
+    log('║  CRISPY STATUS v19                       ║');
     log('║  Hardware Accelerated Engine             ║');
     log('╠══════════════════════════════════════════╣');
     log('║ Primary: Canvas + MediaRecorder (GPU)    ║');
