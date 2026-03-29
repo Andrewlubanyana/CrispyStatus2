@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v15 — Quality Overhaul
+   CRISPY STATUS — v15 — Quality Overhaul & Share Fixes
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -7,7 +7,7 @@ var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
     quality: {
-        shortSide: 720, // 🚀 CHANGED: Match WhatsApp's native HD status resolution
+        shortSide: 720, // Match WhatsApp's native HD status resolution
         audioBitrate: '128k',
         audioRate: 44100,
         audioChannels: 2,
@@ -15,11 +15,10 @@ var CONFIG = {
         preset: 'superfast',
         profile: 'main',
         level: '3.1',
-        keyint: 30, // Force more keyframes
+        keyint: 30,
     },
     tiers: [
-        // 🚀 CHANGED: Massively increased bitrates. MediaRecorder needs higher bitrates 
-        // to maintain quality. We want to feed WhatsApp a pristine source file.
+        // High bitrates required for hardware encoder to provide a clean source for WhatsApp
         { maxDur: 5,  vbr: '4000k', maxrate: '5000k', bufsize: '6000k', targetMB: 2.5, bps: 4000000 },
         { maxDur: 10, vbr: '3500k', maxrate: '4500k', bufsize: '5000k', targetMB: 4.3, bps: 3500000 },
         { maxDur: 15, vbr: '3000k', maxrate: '4000k', bufsize: '4500k', targetMB: 5.6, bps: 3000000 },
@@ -294,7 +293,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
             canvas.height = targetH;
             var ctx = canvas.getContext('2d');
             
-            // 🚀 CHANGED: Force high-quality scaling on the canvas
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
 
@@ -549,22 +547,45 @@ function showDone() {
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
-function downloadVideo() {
+function downloadVideo(fromShareBtn) {
     if (!state.outputUrl) return; haptic('medium');
     var ext = (state.outputBlob && state.outputBlob.type && state.outputBlob.type.includes('webm')) ? 'webm' : 'mp4';
     var a = document.createElement('a'); a.href = state.outputUrl; a.download = 'crispy-status.' + ext;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    showToast('Video saved! Post it to Status now 🔥', 'success');
+    
+    // Custom toast if they clicked Share but we had to route them to Download
+    if (fromShareBtn === true) {
+        showToast('Saved to Gallery! Open WhatsApp to post 📸', 'info', 4500);
+    } else {
+        showToast('Video saved! Post it to Status now 🔥', 'success');
+    }
+
     var c = incrementDownloadCount(); if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500);
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
+
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
+    
+    var isWebM = state.outputBlob.type.includes('webm');
+    var isAndroid = /Android/i.test(navigator.userAgent);
+
+    // FIX: WhatsApp Android truncates WebM files to 3 seconds when shared via Intent.
+    // We bypass the Share Intent and force a download to the Gallery instead.
+    if (isWebM && isAndroid) {
+        downloadVideo(true); 
+        return;
+    }
+
     if (navigator.canShare) {
-        var ext = state.outputBlob.type.includes('webm') ? 'webm' : 'mp4';
+        var ext = isWebM ? 'webm' : 'mp4';
         var f = new File([state.outputBlob], 'crispy-status.' + ext, { type: state.outputBlob.type });
         if (navigator.canShare({ files: [f] })) {
-            navigator.share({ files: [f] }).then(function() { showToast('Shared! 🚀', 'success'); var c = incrementDownloadCount(); if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500); }).catch(function() {});
+            navigator.share({ files: [f] }).then(function() { 
+                showToast('Shared! 🚀', 'success'); 
+                var c = incrementDownloadCount(); 
+                if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500); 
+            }).catch(function() {});
             return;
         }
     }
