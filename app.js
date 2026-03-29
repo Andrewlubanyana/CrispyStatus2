@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v16 — Maximum Quality & Share Fixes
+   CRISPY STATUS — v17 — Duration Metadata Patch
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -7,7 +7,7 @@ var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
     quality: {
-        shortSide: 720, // Match WhatsApp's native HD status resolution
+        shortSide: 720,
         audioBitrate: '128k',
         audioRate: 44100,
         audioChannels: 2,
@@ -18,8 +18,7 @@ var CONFIG = {
         keyint: 30,
     },
     tiers: [
-        // Brute-force bitrates: Force the hardware encoder to use massive bitrates
-        // This gives WhatsApp a pristine, uncompressed-looking source to work with.
+        // High bitrates to defend against WhatsApp's double-compression
         { maxDur: 5,  vbr: '10000k', maxrate: '12000k', bufsize: '12000k', targetMB: 6.0, bps: 10000000 },
         { maxDur: 10, vbr: '8000k',  maxrate: '10000k', bufsize: '10000k', targetMB: 10.0, bps: 8000000 },
         { maxDur: 15, vbr: '8000k',  maxrate: '10000k', bufsize: '10000k', targetMB: 15.0, bps: 8000000 },
@@ -292,12 +291,8 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
             var canvas = document.createElement('canvas');
             canvas.width = targetW;
             canvas.height = targetH;
-            
-            // alpha: false tells the browser the video has no transparency, 
-            // freeing up processing power for better image rendering
             var ctx = canvas.getContext('2d', { alpha: false });
             
-            // Force the best possible downscaling algorithm
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
 
@@ -321,7 +316,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                         if (vs && vs.getAudioTracks().length > 0) {
                             audioTrack = vs.getAudioTracks()[0];
                             hasAudio = true;
-                            log('Audio track captured via stream ✅');
                         }
                     } catch(e) {}
 
@@ -342,10 +336,9 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                                 if (audioDest.stream.getAudioTracks().length > 0) {
                                     audioTrack = audioDest.stream.getAudioTracks()[0];
                                     hasAudio = true;
-                                    log('Audio captured via AudioContext fallback ✅');
                                 }
                             }
-                        } catch (e) { log('Audio fallback failed: ' + e.message); }
+                        } catch (e) {}
                     }
 
                     if (hasAudio && audioTrack) {
@@ -359,10 +352,9 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     try {
                         recorder = new MediaRecorder(canvasStream, {
                             mimeType: mimeType,
-                            videoBitsPerSecond: tier.bps, // Forcing the massive bitrate
+                            videoBitsPerSecond: tier.bps,
                             audioBitsPerSecond: 128000,
                         });
-                        log('Encoder initialized with target bps: ' + tier.bps);
                     } catch (e) {
                         cleanupHW();
                         return reject(new Error('MEDIARECORDER_FAILED'));
@@ -371,10 +363,20 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     var chunks = [];
                     recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
                     recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
+                    
+                    // 🚀 CHANGED: Intercept the blob and inject the duration metadata
                     recorder.onstop = function() {
-                        var blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+                        var rawBlob = new Blob(chunks, { type: mimeType.split(';')[0] });
                         cleanupHW();
-                        resolve(blob);
+
+                        if (mimeType.includes('webm') && typeof ysFixWebmDuration !== 'undefined') {
+                            log('Injecting precise duration metadata into WebM... (' + clipDuration + 's)');
+                            ysFixWebmDuration(rawBlob, clipDuration * 1000, function(fixedBlob) {
+                                resolve(fixedBlob);
+                            });
+                        } else {
+                            resolve(rawBlob);
+                        }
                     };
 
                     recorder.start(500);
@@ -406,7 +408,6 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     }, (clipDuration + 5) * 1000);
 
                 }).catch(function(e) {
-                    log('Playback blocked by browser (autoplay policy). Catching and falling back.');
                     cleanupHW();
                     reject(new Error('AUTOPLAY_BLOCKED'));
                 });
@@ -553,37 +554,23 @@ function showDone() {
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
-function downloadVideo(fromShareBtn) {
+function downloadVideo() {
     if (!state.outputUrl) return; haptic('medium');
     var ext = (state.outputBlob && state.outputBlob.type && state.outputBlob.type.includes('webm')) ? 'webm' : 'mp4';
     var a = document.createElement('a'); a.href = state.outputUrl; a.download = 'crispy-status.' + ext;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     
-    // Custom toast if they clicked Share but we had to route them to Download
-    if (fromShareBtn === true) {
-        showToast('Saved to Gallery! Open WhatsApp to post 📸', 'info', 4500);
-    } else {
-        showToast('Video saved! Post it to Status now 🔥', 'success');
-    }
+    showToast('Video saved! Post it to Status now 🔥', 'success');
 
     var c = incrementDownloadCount(); if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500);
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
+// 🚀 RESTORED DIRECT SHARE MENU: The WebM duration is now fixed, 
+// so we don't need to force Android users to the gallery anymore!
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
     
-    var isAndroid = /Android/i.test(navigator.userAgent);
-
-    // FIX: ANY video generated by the browser's hardware encoder (MediaRecorder) 
-    // lacks duration metadata. WhatsApp Android truncates these to 3 seconds.
-    // We must bypass the Share Intent and force a download to the Gallery instead.
-    if (isAndroid && state.hwEncoderUsed) {
-        log('Android + HW Encoder: Bypassing Share Intent to prevent 3-second bug.');
-        downloadVideo(true); 
-        return;
-    }
-
     if (navigator.canShare) {
         var ext = state.outputBlob.type.includes('webm') ? 'webm' : 'mp4';
         var f = new File([state.outputBlob], 'crispy-status.' + ext, { type: state.outputBlob.type });
@@ -598,6 +585,7 @@ function shareToWhatsApp() {
     }
     downloadVideo();
 }
+
 function showTips() { if (!els.tipsSection || !els.tipsList) return; els.tipsSection.classList.remove('hidden'); els.tipsList.innerHTML = ''; QUALITY_TIPS.forEach(function(t) { var c = document.createElement('div'); c.className = 'tip-card'; c.innerHTML = '<span class="tip-icon">' + t.icon + '</span><div class="tip-content"><strong>' + t.title + '</strong><p>' + t.text + '</p></div>'; els.tipsList.appendChild(c); }); setTimeout(function() { els.tipsSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 350); }
 
 /* ======================== PWA ======================== */
@@ -656,7 +644,7 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v16                       ║');
+    log('║  CRISPY STATUS v17                       ║');
     log('║  Hardware Accelerated Engine             ║');
     log('╠══════════════════════════════════════════╣');
     log('║ Primary: Canvas + MediaRecorder (GPU)    ║');
