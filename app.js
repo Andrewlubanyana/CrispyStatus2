@@ -7,7 +7,7 @@ var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
     quality: {
-        shortSide: 720,
+        shortSide: 1080,    // 🔥 CHANGED FROM 720 TO 1080
         audioBitrate: '128k',
         audioRate: 44100,
         audioChannels: 2,
@@ -17,6 +17,7 @@ var CONFIG = {
         level: '3.1',
         keyint: 30,
     },
+// ... the rest of your config stays exactly the same
     tiers: [
         { maxDur: 5,  vbr: '10000k', maxrate: '12000k', bufsize: '12000k', targetMB: 6.0, bps: 10000000 },
         { maxDur: 10, vbr: '8000k',  maxrate: '10000k', bufsize: '10000k', targetMB: 10.0, bps: 8000000 },
