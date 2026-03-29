@@ -1,5 +1,5 @@
 /* ==========================================================
-   CRISPY STATUS — v19 — Stable MP4 Pipeline & Gallery Workaround
+   CRISPY STATUS — v20 — Lightning Remux & Rejection Fix
    ========================================================== */
 
 /* ======================== CONFIG ======================== */
@@ -18,7 +18,6 @@ var CONFIG = {
         keyint: 30,
     },
     tiers: [
-        // High bitrates to defend against WhatsApp's double-compression
         { maxDur: 5,  vbr: '10000k', maxrate: '12000k', bufsize: '12000k', targetMB: 6.0, bps: 10000000 },
         { maxDur: 10, vbr: '8000k',  maxrate: '10000k', bufsize: '10000k', targetMB: 10.0, bps: 8000000 },
         { maxDur: 15, vbr: '8000k',  maxrate: '10000k', bufsize: '10000k', targetMB: 15.0, bps: 8000000 },
@@ -159,11 +158,22 @@ function showQualityScore() { var qs = calculateQualityScore(); if (els.qualityS
 /* ======================== FILE HANDLING ======================== */
 function handleFileSelect(file) {
     log('File:', { name: file.name, size: formatBytes(file.size), type: file.type });
-    if (!file.type.startsWith('video/') && !file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp)$/i)) { showError('Not a video', 'Please select a video file.'); return; }
+    
+    // 🚀 FIX: Looser validation to prevent rejecting videos from Android gallery pickers
+    var isVideoExt = file.name.match(/\.(mp4|mov|avi|mkv|webm|3gp|hevc)$/i);
+    var isVideoMime = file.type && file.type.startsWith('video/');
+    
+    if (!isVideoExt && !isVideoMime) { 
+        showError('Not a video', 'Please select a valid video file.'); 
+        return; 
+    }
+    
     if (file.size > CONFIG.maxFileSize * 1024 * 1024) { showError('File too large', 'Max ' + CONFIG.maxFileSize + ' MB.'); return; }
     if (file.size < 10000) { showError('File too small', 'Too small.'); return; }
+    
     cleanup(); state.file = file; state.originalSize = file.size; state.objectUrl = URL.createObjectURL(file);
     setButtonLoading(els.uploadBtn, true); els.trimVideo.src = state.objectUrl;
+    
     els.trimVideo.onloadedmetadata = function() {
         setButtonLoading(els.uploadBtn, false); state.duration = els.trimVideo.duration;
         state.videoWidth = els.trimVideo.videoWidth; state.videoHeight = els.trimVideo.videoHeight;
@@ -172,7 +182,12 @@ function handleFileSelect(file) {
         if (state.duration > CONFIG.maxDuration) { setupTrimmer(); showScreen('trim-screen'); }
         else { state.trimStart = 0; startProcessing(); }
     };
-    els.trimVideo.onerror = function() { setButtonLoading(els.uploadBtn, false); showError('Unsupported format', 'Try MP4 or MOV.'); };
+    
+    els.trimVideo.onerror = function() { 
+        setButtonLoading(els.uploadBtn, false); 
+        // 🚀 FIX: Provide a better error message for HEVC files
+        showError('Unsupported format', 'Your browser cannot play this codec (likely an HEVC iPhone video). Try a standard MP4.'); 
+    };
 }
 function setButtonLoading(b, l) { if (!b) return; if (l) b.classList.add('loading'); else b.classList.remove('loading'); }
 
@@ -198,7 +213,6 @@ function isHardwareEncoderAvailable() {
     return !!getBestMimeType(true);
 }
 
-// 🚀 REVERTED: MP4 is back as the absolute priority for all platforms 
 function getBestMimeType(checkOnly = false) {
     var types = [
         'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 
@@ -209,7 +223,6 @@ function getBestMimeType(checkOnly = false) {
         'video/webm; codecs=vp8',
         'video/webm'
     ];
-
     for (var i = 0; i < types.length; i++) {
         if (MediaRecorder.isTypeSupported(types[i])) {
             if (!checkOnly) log('MediaRecorder mime selected: ' + types[i]);
@@ -294,11 +307,7 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
             canvas.width = targetW;
             canvas.height = targetH;
             
-            // alpha: false tells the browser the video has no transparency, 
-            // freeing up processing power for better image rendering
             var ctx = canvas.getContext('2d', { alpha: false });
-            
-            // Force the best possible downscaling algorithm
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
 
@@ -358,10 +367,9 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     try {
                         recorder = new MediaRecorder(canvasStream, {
                             mimeType: mimeType,
-                            videoBitsPerSecond: tier.bps, // Forcing the massive bitrate
+                            videoBitsPerSecond: tier.bps,
                             audioBitsPerSecond: 128000,
                         });
-                        log('Encoder initialized with target bps: ' + tier.bps);
                     } catch (e) {
                         cleanupHW();
                         return reject(new Error('MEDIARECORDER_FAILED'));
@@ -371,11 +379,40 @@ function processWithHardwareEncoder(clipStart, clipDuration, useWatermark) {
                     recorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
                     recorder.onerror = function(e) { cleanupHW(); reject(new Error('MEDIARECORDER_ERROR')); };
                     
-                    // 🚀 REVERTED: Removed the WebM patcher. Simple resolve for MP4.
-                    recorder.onstop = function() {
+                    // 🚀 NEW: THE LIGHTNING REMUX
+                    recorder.onstop = async function() {
                         var rawBlob = new Blob(chunks, { type: mimeType.split(';')[0] });
                         cleanupHW();
-                        resolve(rawBlob);
+                        
+                        try {
+                            updateStatus('Fixing WhatsApp headers… 🔧');
+                            if (!state.ffmpegReady) await loadFFmpeg();
+                            
+                            var fd = new Uint8Array(await rawBlob.arrayBuffer());
+                            var inputExt = mimeType.includes('webm') ? 'webm' : 'mp4';
+                            await state.ffmpeg.writeFile('raw_hw.' + inputExt, fd);
+                            
+                            // The magic command: -c copy prevents re-encoding (takes 1 second).
+                            // -movflags +faststart fixes the file for WhatsApp.
+                            var cmd = ['-i', 'raw_hw.' + inputExt, '-c', 'copy'];
+                            if (inputExt === 'mp4') {
+                                cmd.push('-movflags', '+faststart');
+                            }
+                            cmd.push('fixed.' + inputExt);
+                            
+                            var exitCode = await state.ffmpeg.exec(cmd);
+                            if (exitCode === 0) {
+                                var fixedData = await state.ffmpeg.readFile('fixed.' + inputExt);
+                                var fixedBlob = new Blob([fixedData.buffer], { type: 'video/' + inputExt });
+                                log('✅ FFmpeg lightning remux successful!');
+                                resolve(fixedBlob);
+                            } else {
+                                throw new Error('Remux failed');
+                            }
+                        } catch (e) {
+                            log('⚠️ Lightning remux failed, falling back to raw hardware blob: ' + e.message);
+                            resolve(rawBlob);
+                        }
                     };
 
                     recorder.start(500);
@@ -553,34 +590,23 @@ function showDone() {
 }
 
 /* ======================== DOWNLOAD & SHARE ======================== */
-function downloadVideo(fromShareBtn) {
+function downloadVideo() {
     if (!state.outputUrl) return; haptic('medium');
     var ext = (state.outputBlob && state.outputBlob.type && state.outputBlob.type.includes('webm')) ? 'webm' : 'mp4';
     var a = document.createElement('a'); a.href = state.outputUrl; a.download = 'crispy-status.' + ext;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     
-    if (fromShareBtn === true) {
-        showToast('Saved to Gallery! Open WhatsApp to post 📸', 'info', 4500);
-    } else {
-        showToast('Video saved! Post it to Status now 🔥', 'success');
-    }
+    showToast('Video saved! Post it to Status now 🔥', 'success');
 
     var c = incrementDownloadCount(); if (shouldShowRatingPrompt(c)) setTimeout(function() { showRatingPrompt(c); }, 2500);
     if (!state.tipsShown) { state.tipsShown = true; setTimeout(showTips, 600); }
 }
 
-// 🚀 REVERTED: The Gallery Workaround is back for Android users to fix the 3-second cut
+// 🚀 REVERTED: Because the Lightning Remux gives us a perfect file, 
+// the direct Share button works again for everyone. No more gallery routing!
 function shareToWhatsApp() {
     if (!state.outputBlob) return; haptic('medium');
     
-    var isAndroid = /Android/i.test(navigator.userAgent);
-
-    if (isAndroid && state.hwEncoderUsed) {
-        log('Android + HW Encoder: Bypassing Share Intent to prevent 3-second bug.');
-        downloadVideo(true); 
-        return;
-    }
-
     if (navigator.canShare) {
         var ext = state.outputBlob.type.includes('webm') ? 'webm' : 'mp4';
         var f = new File([state.outputBlob], 'crispy-status.' + ext, { type: state.outputBlob.type });
@@ -654,10 +680,10 @@ function preloadFFmpeg() {
 function init() {
     log('');
     log('╔══════════════════════════════════════════╗');
-    log('║  CRISPY STATUS v19                       ║');
-    log('║  Hardware Accelerated Engine             ║');
+    log('║  CRISPY STATUS v20                       ║');
+    log('║  Lightning Remux Engine                  ║');
     log('╠══════════════════════════════════════════╣');
-    log('║ Primary: Canvas + MediaRecorder (GPU)    ║');
+    log('║ Primary: GPU Encode + FFmpeg Fast Remux  ║');
     log('║ Fallback: FFmpeg WASM (software)         ║');
     log('║ HW encoder: ' + (isHardwareEncoderAvailable() ? '✅ AVAILABLE' : '❌ not available'));
     if (isHardwareEncoderAvailable()) {
