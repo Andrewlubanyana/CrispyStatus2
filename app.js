@@ -7,7 +7,7 @@ var CONFIG = {
     maxDuration: 30,
     maxFileSize: 500,
     quality: {
-        shortSide: 1080,    // 🔥 CHANGED FROM 720 TO 1080
+        shortSide: 720,    // 🔥 CHANGED BACK TO 720
         audioBitrate: '128k',
         audioRate: 44100,
         audioChannels: 2,
